@@ -457,6 +457,7 @@
     <input type="text" id="searchBox" placeholder="Search name or location...">
     <div class="spacer"></div>
     <button class="btn btn-outline" id="reportBtn">Not-Checked Report</button>
+    <button class="btn btn-flag" id="masterReportBtn" style="display:none;">Master Report</button>
     <button class="btn btn-outline" id="accessBtn" style="display:none;">Manage Access</button>
     <button class="btn btn-flag" id="notifyBtn" style="display:none;">Notify Teams &rarr;</button>
     <button class="btn btn-primary" id="addBtn" style="display:none;">+ Add Unit</button>
@@ -644,6 +645,31 @@
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeReportModal()">Close</button>
       <button class="btn btn-flag" id="emailReportBtn" onclick="emailNotCheckedReport()">Email to Teams</button>
+    </div>
+  </div>
+</div>
+
+<!-- Master Report Modal (admin only) -->
+<div class="overlay" id="masterReportOverlay">
+  <div class="modal" style="max-width:560px;">
+    <h2>Master Report</h2>
+    <div class="sub">Full fleet — every unit, regardless of who's assigned to what</div>
+    <div id="masterReportBody" style="max-height:55vh; overflow-y:auto; margin:10px 0;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeMasterReportModal()">Close</button>
+      <button class="btn btn-flag" onclick="sendMasterReport()">Send Master Report</button>
+    </div>
+  </div>
+</div>
+
+<!-- Full History Modal (per unit, grouped by day) -->
+<div class="overlay" id="historyOverlay">
+  <div class="modal" style="max-width:520px;">
+    <h2 id="historyTitle">History</h2>
+    <div class="sub" id="historySub"></div>
+    <div id="historyBody" style="max-height:60vh; overflow-y:auto; margin:10px 0;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeHistoryModal()">Close</button>
     </div>
   </div>
 </div>
@@ -1050,6 +1076,7 @@ function render(){
   const admin = isAdmin();
   document.getElementById('addBtn').style.display = admin ? 'inline-block' : 'none';
   document.getElementById('accessBtn').style.display = admin ? 'inline-block' : 'none';
+  document.getElementById('masterReportBtn').style.display = admin ? 'inline-block' : 'none';
 
   const typeF = document.getElementById('filterType').value;
   const statusF = document.getElementById('filterStatus').value;
@@ -1118,6 +1145,7 @@ function render(){
       ${histHtml ? `<div class="hist">${histHtml}</div>` : ''}
       <div class="card-actions">
         <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')" ${currentUser?'':'disabled'}>Log Check</button>
+        <button class="btn btn-outline btn-small" onclick="openHistoryModal('${u.id}')">Full History</button>
         ${admin ? `<button class="btn btn-outline btn-small" onclick="openEditModal('${u.id}')">Edit</button>` : ''}
         ${admin ? `<button class="btn btn-outline btn-small" onclick="deleteUnit('${u.id}')" style="color:var(--flag); border-color:var(--flag);">Delete</button>` : ''}
       </div>
@@ -1303,9 +1331,10 @@ async function saveCheck(){
   if(photo) u.lastPhoto = photo;
   u.history = u.history || [];
   u.history.push({at:now, temp, fans, notes, by:currentUser, photo: photo || null});
-  if(u.history.length>20) u.history = u.history.slice(-20);
-  // Keep photos on only the 5 most recent entries so a unit's record doesn't
-  // balloon in size — older photos are dropped but temp/fan/notes history stays.
+  // Keep a full running log for the season (500 checks/unit is generous headroom).
+  if(u.history.length>500) u.history = u.history.slice(-500);
+  // Photos still cap at the 5 most recent so a unit's record doesn't balloon in size —
+  // older entries keep their temp/fan/notes text, just lose the image.
   const keepPhotosFrom = Math.max(0, u.history.length - 5);
   u.history = u.history.map((h,i)=> i<keepPhotosFrom ? {...h, photo:null} : h);
 
@@ -1388,6 +1417,118 @@ async function emailNotCheckedReport(){
   );
   if(ok){ toast("Report sent to Teams."); closeReportModal(); }
 }
+
+// --- Master Report (admin only) — full fleet, always unscoped ---
+function complianceReasons(u){
+  const reasons = [];
+  if(u.fansOperating===false) reasons.push("fans down");
+  if(u.currentTemp!==null && u.currentTemp!==undefined && (u.currentTemp<u.tmin || u.currentTemp>u.tmax)){
+    reasons.push(`${u.currentTemp}°F (target ${u.tmin}-${u.tmax}°F)`);
+  }
+  return reasons;
+}
+function openMasterReportModal(){
+  const outOfCompliance = units.filter(u=>statusOf(u)==="flag");
+  const notChecked = units.filter(u=>neverChecked(u) || isStale(u));
+  const okCount = units.length - outOfCompliance.length - notChecked.filter(u=>statusOf(u)!=="flag").length;
+
+  const body = document.getElementById('masterReportBody');
+  const section = (title, list, color, renderLine) => list.length ? `
+    <div style="margin-bottom:14px;">
+      <div style="font-family:var(--mono); font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:${color}; font-weight:700; margin-bottom:6px;">
+        ${title} (${list.length})
+      </div>
+      ${list.map(u=>`<div style="padding:6px 0; border-bottom:1px solid var(--border); font-size:13.5px;">
+        <b>${escapeHtml(u.name)}</b> <span style="color:#888; font-family:var(--mono); font-size:11px;">(${escapeHtml(u.location||'')})</span>
+        <div style="font-family:var(--mono); font-size:11.5px; color:${color};">${renderLine(u)}</div>
+      </div>`).join('')}
+    </div>` : '';
+
+  body.innerHTML =
+    section("Out of Compliance", outOfCompliance, "var(--flag)", u=>complianceReasons(u).join(', ') || 'flagged') +
+    section("Not Checked / Stale", notChecked, "var(--unset)", u=>neverChecked(u) ? "never checked" : `last checked ${fmtDate(u.lastCheckAt)} by ${u.lastCheckBy}`) +
+    `<div style="font-family:var(--mono); font-size:12px; color:#777; padding-top:6px;">${okCount} unit(s) in compliance and checked recently — omitted for brevity.</div>`;
+
+  document.getElementById('masterReportOverlay').classList.add('show');
+}
+function closeMasterReportModal(){
+  document.getElementById('masterReportOverlay').classList.remove('show');
+}
+async function sendMasterReport(){
+  const outOfCompliance = units.filter(u=>statusOf(u)==="flag");
+  const notChecked = units.filter(u=>neverChecked(u) || isStale(u));
+  const okCount = units.length - outOfCompliance.length - notChecked.filter(u=>statusOf(u)!=="flag").length;
+
+  const lines = [];
+  lines.push(`OUT OF COMPLIANCE (${outOfCompliance.length}):`);
+  if(outOfCompliance.length===0) lines.push("  none");
+  outOfCompliance.forEach(u=> lines.push(`  - ${u.name} (${u.location||''}): ${complianceReasons(u).join(', ')||'flagged'} [checked by ${u.lastCheckBy||'—'}]`));
+  lines.push("");
+  lines.push(`NOT CHECKED / STALE (${notChecked.length}):`);
+  if(notChecked.length===0) lines.push("  none");
+  notChecked.forEach(u=> lines.push(`  - ${u.name} (${u.location||''}): ${neverChecked(u)?'never checked':`last checked ${fmtDate(u.lastCheckAt)} by ${u.lastCheckBy}`}`));
+  lines.push("");
+  lines.push(`${okCount} unit(s) in compliance and checked recently.`);
+  lines.push(`${units.length} total units in the system.`);
+
+  const ok = await sendTeamsEmail(
+    `Master Refrigeration Report — ${outOfCompliance.length} out of compliance — PARF`,
+    `Full-fleet compliance report:\n\n${lines.join('\n')}\n\nSent by: ${currentUser||'—'}`
+  );
+  if(ok){ toast("Master report sent to Teams."); closeMasterReportModal(); }
+}
+document.getElementById('masterReportBtn').addEventListener('click', openMasterReportModal);
+document.getElementById('masterReportOverlay').addEventListener('click', (e)=>{ if(e.target.id==='masterReportOverlay') closeMasterReportModal(); });
+
+// --- Full History (per unit, grouped by day) ---
+function dayKey(iso){
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined,{weekday:'short', month:'short', day:'numeric', year:'numeric'});
+}
+function openHistoryModal(unitId){
+  const u = units.find(x=>x.id===unitId);
+  if(!u) return;
+  document.getElementById('historyTitle').textContent = `${u.name} — Full History`;
+  const hist = (u.history||[]).slice().reverse(); // newest first
+  document.getElementById('historySub').textContent = `${hist.length} logged check(s)`;
+  const body = document.getElementById('historyBody');
+  if(hist.length===0){
+    body.innerHTML = `<div style="padding:20px 0; color:#777;">No checks logged yet.</div>`;
+    document.getElementById('historyOverlay').classList.add('show');
+    return;
+  }
+  const groups = [];
+  hist.forEach(h=>{
+    const key = dayKey(h.at);
+    let g = groups.find(x=>x.key===key);
+    if(!g){ g = {key, entries:[]}; groups.push(g); }
+    g.entries.push(h);
+  });
+  body.innerHTML = groups.map(g=>`
+    <div style="margin-bottom:12px;">
+      <div style="font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#888; font-weight:700; margin-bottom:4px;">${g.key}</div>
+      ${g.entries.map(h=>{
+        const outOfRange = (h.temp<u.tmin || h.temp>u.tmax);
+        const bad = outOfRange || h.fans===false;
+        return `<div style="display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--border);">
+          <div style="flex:1; font-size:13.5px;">
+            <span style="font-family:var(--mono); color:#888; font-size:12px;">${new Date(h.at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}</span>
+            &nbsp;<span style="color:${bad?'var(--flag)':'var(--ink)'}; font-weight:600;">${h.temp}°F</span>
+            &nbsp;<span style="color:${h.fans===false?'var(--flag)':'#888'};">fans ${h.fans?'ok':'DOWN'}</span>
+            &nbsp;<span style="color:#888;">· ${escapeHtml(h.by)}</span>
+            ${h.notes?`<div style="color:#666; font-size:12.5px; margin-top:2px;">${escapeHtml(h.notes)}</div>`:''}
+          </div>
+          ${h.photo?`<img src="${h.photo}" onclick="openLightbox(this.src)" style="width:52px; height:52px; object-fit:cover; border-radius:6px; cursor:pointer; flex-shrink:0;">`:''}
+        </div>`;
+      }).join('')}
+    </div>
+  `).join('');
+  document.getElementById('historyOverlay').classList.add('show');
+}
+function closeHistoryModal(){
+  document.getElementById('historyOverlay').classList.remove('show');
+}
+document.getElementById('historyOverlay').addEventListener('click', (e)=>{ if(e.target.id==='historyOverlay') closeHistoryModal(); });
 
 document.getElementById('notifyBtn').addEventListener('click', async ()=>{
   const flagged = visibleUnits().filter(u=>statusOf(u)==="flag");
