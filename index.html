@@ -424,10 +424,10 @@
       <button class="btn btn-outline btn-small" id="loginBtn">Log In</button>
     </div>
   </div>
-  <div class="stat-strip" id="statStrip"></div>
+  <div class="stat-strip" id="statStrip" style="display:none;"></div>
 </header>
 
-<main>
+<main id="appMain" style="display:none;">
   <div class="toolbar">
     <select id="filterType">
       <option value="">All types</option>
@@ -823,6 +823,10 @@ function renderRoleControls(){
   }
 }
 
+function showApp(show){
+  document.getElementById('appMain').style.display = show ? 'block' : 'none';
+  document.getElementById('statStrip').style.display = show ? 'flex' : 'none';
+}
 function openLoginModal(){
   document.getElementById('login_pin').value = "";
   document.getElementById('loginError').textContent = "";
@@ -843,6 +847,7 @@ function submitLogin(){
   currentUserId = match.id;
   sessionStorage.setItem('rt_session_uid', match.id);
   closeLoginModal();
+  showApp(true);
   renderRoleControls();
   render();
   toast(`Logged in as ${match.name}.`);
@@ -852,8 +857,9 @@ function logout(){
   currentUser = "";
   currentUserId = null;
   sessionStorage.removeItem('rt_session_uid');
+  showApp(false);
   renderRoleControls();
-  render();
+  openLoginModal();
 }
 function restoreSession(){
   const savedId = sessionStorage.getItem('rt_session_uid');
@@ -934,7 +940,6 @@ async function removeUser(id){
 }
 document.getElementById('accessBtn').addEventListener('click', openAccessModal);
 document.getElementById('accessOverlay').addEventListener('click', (e)=>{ if(e.target.id==='accessOverlay') closeAccessModal(); });
-document.getElementById('loginOverlay').addEventListener('click', (e)=>{ if(e.target.id==='loginOverlay') closeLoginModal(); });
 
 function computeStats(){
   let ok=0, flag=0, unset=0;
@@ -1321,7 +1326,13 @@ document.getElementById('checkOverlay').addEventListener('click', (e)=>{ if(e.ta
   await loadAll();
   restoreSession();
   renderRoleControls();
-  render();
+  if(currentUser){
+    showApp(true);
+    render();
+  } else {
+    showApp(false);
+    openLoginModal();
+  }
 })();
 </script>
 </body>
