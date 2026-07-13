@@ -93,6 +93,8 @@
     display:flex;
     align-items:center;
     gap:8px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
     font-family:var(--mono);
     font-size:13px;
   }
@@ -104,6 +106,10 @@
     border-radius:7px;
     font-family:var(--mono);
     font-size:13px;
+  }
+  @media (max-width: 480px){
+    .header-row{ flex-direction:column; align-items:stretch; }
+    .who-box{ justify-content:flex-start; width:100%; }
   }
   .role-pill{
     font-family:var(--mono);
