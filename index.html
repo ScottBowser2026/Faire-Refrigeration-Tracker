@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PARF Refrigeration Tracker</title>
+<!--
+  =====================================================================
+  SETUP NOTES — read before deploying
+  =====================================================================
+  1) FIREBASE — replace firebaseConfig below (search "FIREBASE CONFIG")
+     with your project's config from Firebase console > Project settings
+     > Your apps. This app writes everything under a top-level
+     "refrigeration" node, so it's safe to reuse an existing project
+     (e.g. faire-food-qc) without colliding with other data.
+
+  2) EMAILJS — replace EMAILJS_PUBLIC_KEY, EMAILJS_SERVICE_ID, and
+     EMAILJS_TEMPLATE_ID (search "EMAILJS CONFIG"). Create a template
+     in your EmailJS dashboard with these variables:
+       {{to_email}} {{subject}} {{report_body}} {{sent_by}}
+     Set the template's "To Email" field to {{to_email}} (not a
+     hardcoded address) so it actually routes to the Teams channel.
+  =====================================================================
+-->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<style>
+  :root{
+    --ink:#1c2321;
+    --paper:#eef0ea;
+    --steel:#3d4a45;
+    --steel-2:#2a3330;
+    --frost:#7fb5b8;
+    --frost-deep:#3f7d82;
+    --ok:#4c7a4c;
+    --ok-bg:#e3ede1;
+    --flag:#a4402f;
+    --flag-bg:#f5e2dd;
+    --unset:#8a8f8a;
+    --unset-bg:#e6e6e2;
+    --card:#ffffff;
+    --border:#d8dcd3;
+    --radius:10px;
+    --mono: 'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+    --sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  header{
+    background:var(--steel-2);
+    color:var(--paper);
+    padding:18px 20px 16px;
+    position:sticky;
+    top:0;
+    z-index:20;
+    box-shadow:0 2px 8px rgba(0,0,0,.15);
+  }
+  .header-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  .brand{
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+  }
+  .brand .eyebrow{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--frost);
+  }
+  .brand h1{
+    margin:0;
+    font-size:22px;
+    font-weight:700;
+    letter-spacing:-.01em;
+  }
+  .who-box{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-family:var(--mono);
+    font-size:13px;
+  }
+  .who-box select, .who-box input{
+    background:var(--steel);
+    border:1px solid #4d5b55;
+    color:var(--paper);
+    padding:7px 10px;
+    border-radius:7px;
+    font-family:var(--mono);
+    font-size:13px;
+  }
+  .role-pill{
+    font-family:var(--mono);
+    font-size:11px;
+    padding:3px 8px;
+    border-radius:20px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+  }
+  .role-admin{background:var(--frost); color:#0d2a2b;}
+  .role-crew{background:#5b675f; color:var(--paper);}
+
+  .stat-strip{
+    display:flex;
+    gap:18px;
+    margin-top:14px;
+    flex-wrap:wrap;
+    font-family:var(--mono);
+    font-size:12px;
+  }
+  .stat-strip .stat{
+    display:flex;
+    align-items:baseline;
+    gap:6px;
+    color:#c9d2cb;
+  }
+  .stat-strip .stat b{
+    font-size:18px;
+    color:var(--paper);
+  }
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .dot-ok{background:#7fbf7f;}
+  .dot-flag{background:#e08268;}
+  .dot-unset{background:#a9afa8;}
+
+  main{
+    max-width:1100px;
+    margin:0 auto;
+    padding:20px 20px 90px;
+  }
+
+  .toolbar{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    margin-bottom:16px;
+  }
+  .toolbar select, .toolbar input[type="text"]{
+    padding:9px 11px;
+    border:1px solid var(--border);
+    border-radius:8px;
+    font-family:var(--sans);
+    font-size:13px;
+    background:var(--card);
+    color:var(--ink);
+  }
+  .spacer{flex:1;}
+  button{
+    font-family:var(--sans);
+    cursor:pointer;
+  }
+  .btn{
+    border:none;
+    border-radius:8px;
+    padding:10px 16px;
+    font-size:13px;
+    font-weight:600;
+    letter-spacing:.01em;
+  }
+  .btn-primary{background:var(--steel-2); color:var(--paper);}
+  .btn-primary:hover{background:var(--steel);}
+  .btn-outline{background:transparent; border:1px solid var(--steel-2); color:var(--steel-2);}
+  .btn-outline:hover{background:#e2e6de;}
+  .btn-flag{background:var(--flag); color:#fff;}
+  .btn-flag:hover{background:#8c3627;}
+  .btn-small{padding:6px 11px; font-size:12px; border-radius:6px;}
+  .btn:disabled{opacity:.45; cursor:not-allowed;}
+
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(270px,1fr));
+    gap:14px;
+  }
+  .card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:15px 16px 14px;
+    border-left:5px solid var(--unset);
+    position:relative;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .card.ok{border-left-color:var(--ok);}
+  .card.flag{border-left-color:var(--flag); background:linear-gradient(180deg,#fff,#fdf6f4);}
+  .card-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:8px;
+  }
+  .card-title{
+    font-weight:700;
+    font-size:15px;
+    line-height:1.25;
+  }
+  .card-loc{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:#666;
+    margin-top:2px;
+  }
+  .badge-row{display:flex; gap:6px; flex-wrap:wrap;}
+  .badge{
+    font-family:var(--mono);
+    font-size:10.5px;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+    padding:3px 7px;
+    border-radius:5px;
+    background:#eef1ec;
+    color:var(--steel-2);
+    border:1px solid var(--border);
+  }
+  .status-tag{
+    font-family:var(--mono);
+    font-size:11px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.05em;
+    padding:4px 8px;
+    border-radius:6px;
+    white-space:nowrap;
+  }
+  .status-ok{background:var(--ok-bg); color:var(--ok);}
+  .status-flag{background:var(--flag-bg); color:var(--flag);}
+  .status-unset{background:var(--unset-bg); color:var(--unset);}
+
+  .metric-row{
+    display:flex;
+    gap:14px;
+    font-family:var(--mono);
+    font-size:13px;
+    margin-top:2px;
+  }
+  .metric{display:flex; flex-direction:column; gap:1px;}
+  .metric .label{font-size:10px; color:#888; text-transform:uppercase; letter-spacing:.05em;}
+  .metric .val{font-size:16px; font-weight:600;}
+  .metric .val.bad{color:var(--flag);}
+  .metric .val.good{color:var(--ok);}
+
+  .last-check{
+    font-size:11.5px;
+    color:#777;
+    font-family:var(--mono);
+  }
+
+  .card-actions{
+    display:flex;
+    gap:8px;
+    margin-top:6px;
+    flex-wrap:wrap;
+  }
+
+  /* modal */
+  .overlay{
+    position:fixed; inset:0;
+    background:rgba(20,26,23,.55);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index:50;
+    padding:16px;
+  }
+  .overlay.show{display:flex;}
+  .modal{
+    background:#fff;
+    border-radius:12px;
+    width:100%;
+    max-width:420px;
+    max-height:88vh;
+    overflow-y:auto;
+    padding:22px 22px 18px;
+  }
+  .modal h2{
+    margin:0 0 4px;
+    font-size:18px;
+  }
+  .modal .sub{
+    font-size:12.5px;
+    color:#777;
+    margin-bottom:14px;
+    font-family:var(--mono);
+  }
+  .field{margin-bottom:12px;}
+  .field label{
+    display:block;
+    font-size:11.5px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+    color:#555;
+    margin-bottom:5px;
+  }
+  .field input, .field select, .field textarea{
+    width:100%;
+    padding:9px 10px;
+    border:1px solid var(--border);
+    border-radius:7px;
+    font-size:14px;
+    font-family:var(--sans);
+  }
+  .field textarea{resize:vertical; min-height:56px;}
+  .two-col{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .modal-actions{
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    margin-top:16px;
+  }
+  .toggle-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    background:#f4f5f1;
+    border-radius:8px;
+    padding:9px 12px;
+    margin-bottom:12px;
+  }
+  .toggle-row span{font-size:13.5px; font-weight:500;}
+  .switch{
+    position:relative;
+    width:46px; height:26px;
+    flex-shrink:0;
+  }
+  .switch input{opacity:0; width:0; height:0;}
+  .slider{
+    position:absolute; inset:0;
+    background:#c7ccc2;
+    border-radius:20px;
+    transition:.15s;
+    cursor:pointer;
+  }
+  .slider:before{
+    content:"";
+    position:absolute;
+    height:20px; width:20px;
+    left:3px; top:3px;
+    background:#fff;
+    border-radius:50%;
+    transition:.15s;
+  }
+  input:checked + .slider{background:var(--ok);}
+  input:checked + .slider:before{transform:translateX(20px);}
+
+  .empty{
+    text-align:center;
+    padding:60px 20px;
+    color:#777;
+  }
+  .empty h3{margin:0 0 6px; color:var(--ink);}
+
+  footer{
+    text-align:center;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#8b8f87;
+    padding:24px 0 10px;
+  }
+
+  .toast{
+    position:fixed;
+    bottom:20px; left:50%;
+    transform:translateX(-50%);
+    background:var(--steel-2);
+    color:var(--paper);
+    padding:11px 18px;
+    border-radius:8px;
+    font-size:13px;
+    font-family:var(--sans);
+    box-shadow:0 4px 14px rgba(0,0,0,.25);
+    z-index:60;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .25s, transform .25s;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(-4px);}
+
+  .hist{
+    margin-top:6px;
+    border-top:1px dashed var(--border);
+    padding-top:8px;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#666;
+    max-height:100px;
+    overflow-y:auto;
+  }
+  .hist div{margin-bottom:3px;}
+  .link-btn{
+    background:none; border:none; color:var(--frost-deep);
+    font-family:var(--mono); font-size:11px; text-decoration:underline;
+    padding:0; cursor:pointer;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <div class="brand">
+      <div class="eyebrow">Mount Hope &middot; PARF</div>
+      <h1>Refrigeration Tracker</h1>
+    </div>
+    <div class="who-box">
+      <span id="roleWrap"></span>
+      <select id="nameSelect"></select>
+      <input id="nameInput" type="text" placeholder="Your name" style="display:none;">
+    </div>
+  </div>
+  <div class="stat-strip" id="statStrip"></div>
+</header>
+
+<main>
+  <div class="toolbar">
+    <select id="filterType">
+      <option value="">All types</option>
+      <option value="walk-in">Walk-in</option>
+      <option value="chest-freezer">Chest Freezer</option>
+      <option value="upright">Upright</option>
+      <option value="bain-marie">Bain Marie</option>
+    </select>
+    <select id="filterStatus">
+      <option value="">All statuses</option>
+      <option value="ok">OK</option>
+      <option value="flag">Flagged</option>
+      <option value="unset">Not checked</option>
+    </select>
+    <input type="text" id="searchBox" placeholder="Search name or location...">
+    <div class="spacer"></div>
+    <button class="btn btn-outline" id="reportBtn">Not-Checked Report</button>
+    <button class="btn btn-flag" id="notifyBtn" style="display:none;">Notify Teams &rarr;</button>
+    <button class="btn btn-primary" id="addBtn" style="display:none;">+ Add Unit</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="emptyState" style="display:none;">
+    <h3>No units match</h3>
+    <div>Adjust filters or add a unit.</div>
+  </div>
+</main>
+
+<footer>PARF Refrigeration Tracker &middot; data syncs across the team</footer>
+
+<!-- Add/Edit Unit Modal -->
+<div class="overlay" id="unitOverlay">
+  <div class="modal">
+    <h2 id="unitModalTitle">Add Unit</h2>
+    <div class="sub">Walk-in, chest freezer, upright, or bain marie</div>
+
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="f_name" placeholder="e.g. Braten Walk-In">
+    </div>
+    <div class="two-col">
+      <div class="field">
+        <label>Type</label>
+        <select id="f_type">
+          <option value="walk-in">Walk-in</option>
+          <option value="chest-freezer">Chest Freezer</option>
+          <option value="upright">Upright</option>
+          <option value="bain-marie">Bain Marie</option>
+        </select>
+      </div>
+      <div class="field" id="f_subtypeWrap">
+        <label>Cooler / Freezer</label>
+        <select id="f_subtype">
+          <option value="cooler">Cooler</option>
+          <option value="freezer">Freezer</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Booth / Location</label>
+      <input type="text" id="f_location" placeholder="e.g. Braten booth">
+    </div>
+    <div class="field">
+      <label>Stock / Contents</label>
+      <input type="text" id="f_stock" placeholder="e.g. food backstock">
+    </div>
+    <div class="two-col">
+      <div class="field">
+        <label>Run-time</label>
+        <select id="f_runtime">
+          <option value="always">Always</option>
+          <option value="seasonal">Seasonal</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Target Range (&deg;F)</label>
+        <div style="display:flex; gap:6px;">
+          <input type="number" id="f_tmin" placeholder="min">
+          <input type="number" id="f_tmax" placeholder="max">
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeUnitModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveUnit()">Save Unit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Log Check Modal -->
+<div class="overlay" id="checkOverlay">
+  <div class="modal">
+    <h2>Log Check</h2>
+    <div class="sub" id="checkSub"></div>
+
+    <div class="field">
+      <label>Temperature reading (&deg;F)</label>
+      <input type="number" id="c_temp" placeholder="e.g. 36">
+    </div>
+    <div class="toggle-row">
+      <span>Fans operating</span>
+      <label class="switch">
+        <input type="checkbox" id="c_fans" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="field">
+      <label>Notes (optional)</label>
+      <textarea id="c_notes" placeholder="anything the next person should know"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeCheckModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCheck()">Save Check</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Not-Checked Report Modal -->
+<div class="overlay" id="reportOverlay">
+  <div class="modal" style="max-width:520px;">
+    <h2>Not-Checked Report</h2>
+    <div class="sub" id="reportSub"></div>
+    <div id="reportBody" style="max-height:50vh; overflow-y:auto; margin:10px 0;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeReportModal()">Close</button>
+      <button class="btn btn-flag" id="emailReportBtn" onclick="emailNotCheckedReport()">Email to Teams</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const TEAMS_EMAIL = "4cf889c9.parenfaire.com@amer.teams.ms";
+const STALE_HOURS = 12; // a check older than this counts as "not checked" for the report
+
+// ===================== FIREBASE CONFIG =====================
+// Replace with your project's config (see setup notes in <head>).
+const firebaseConfig = {
+  apiKey: "AIzaSyAbfRF6wjHPep0ll7BzqfeFVMZFc5hDqLA",
+  authDomain: "refrigeration-tracker.firebaseapp.com",
+  databaseURL: "https://refrigeration-tracker-default-rtdb.firebaseio.com",
+  projectId: "refrigeration-tracker",
+  storageBucket: "refrigeration-tracker.firebasestorage.app",
+  messagingSenderId: "1031158399606",
+  appId: "1:1031158399606:web:6ba81dd096dd2d26101557",
+  measurementId: "G-NPQ7CMWTKR"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const refUnits = db.ref('refrigeration/units');
+const refAdmins = db.ref('refrigeration/admins');
+
+// ===================== EMAILJS CONFIG =====================
+const EMAILJS_PUBLIC_KEY = "YOUR-EMAILJS-PUBLIC-KEY";
+const EMAILJS_SERVICE_ID = "YOUR-EMAILJS-SERVICE-ID";
+const EMAILJS_TEMPLATE_ID = "YOUR-EMAILJS-TEMPLATE-ID";
+if (window.emailjs) emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+
+let admins = ["Scott", "Daniel"];
+let units = [];
+let currentUser = "";
+let editingUnitId = null;
+let checkingUnitId = null;
+
+const TYPE_LABEL = {
+  "walk-in":"Walk-in",
+  "chest-freezer":"Chest Freezer",
+  "upright":"Upright",
+  "bain-marie":"Bain Marie"
+};
+
+const DEFAULT_RANGES = {
+  "walk-in-cooler":[33,40],
+  "walk-in-freezer":[-10,0],
+  "chest-freezer":[-10,0],
+  "upright":[33,40],
+  "bain-marie":[135,165]
+};
+
+function uid(){ return 'u_' + Math.random().toString(36).slice(2,10); }
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2400);
+}
+
+function isAdmin(name){
+  return admins.map(a=>a.toLowerCase()).includes((name||"").trim().toLowerCase());
+}
+
+async function loadAll(){
+  // One-time read to seed if empty, then live listeners keep everything in sync.
+  const adminSnap = await refAdmins.once('value');
+  if(adminSnap.exists()){
+    admins = adminSnap.val();
+  } else {
+    await refAdmins.set(admins);
+  }
+
+  const unitsSnap = await refUnits.once('value');
+  if(unitsSnap.exists()){
+    units = objToArray(unitsSnap.val());
+  } else {
+    units = seedUnits();
+    await writeUnitsToFirebase(units);
+  }
+
+  // Live sync: any device's change re-renders everyone's view.
+  refAdmins.on('value', (snap)=>{
+    if(snap.exists()){ admins = snap.val(); renderRoleControls(); populateNameSelect(); render(); }
+  });
+  refUnits.on('value', (snap)=>{
+    if(snap.exists()){ units = objToArray(snap.val()); render(); }
+  });
+}
+
+function objToArray(obj){
+  return Object.keys(obj).map(k=>({ id:k, ...obj[k] }));
+}
+function arrayToObj(arr){
+  const o = {};
+  arr.forEach(u=>{ const {id, ...rest} = u; o[id] = rest; });
+  return o;
+}
+async function writeUnitsToFirebase(list){
+  await refUnits.set(arrayToObj(list));
+}
+
+async function persistUnits(){
+  await writeUnitsToFirebase(units);
+}
+async function persistAdmins(){
+  await refAdmins.set(admins);
+}
+
+function seedUnits(){
+  const raw = [
+    ["Back40","back stock","cooler","always"],
+    ["Main Kitchen Walk-in","prep / private events","cooler","always"],
+    ["Main Kitchen Freezer","prep / private events","freezer","always"],
+    ["Winery Walk-in","wine / cider / rtd","cooler","always"],
+    ["Brewery Walk-In","beer","cooler","always"],
+    ["Taproom Walk-in","private events","cooler","always"],
+    ["Production Kitchen Walk-in","food","cooler","always"],
+    ["Production Kitchen Freezer","food","freezer","always"],
+    ["Mansion Walk-in","bar stock","cooler","always"],
+    ["Wharf Walk-in x2","bar stock","cooler","seasonal"],
+    ["Inside Wharf Walk-in","bar stock","cooler","seasonal"],
+    ["Argyle Walk-in","food","cooler","seasonal"],
+    ["Majesty Cup Walk-in","food","cooler","seasonal"],
+    ["Bread and Broth Walk-in","food","cooler","seasonal"],
+    ["Cockneys Walk-in","bar stock","cooler","seasonal"],
+    ["O'Malleys Walk-in","bar stock","cooler","seasonal"],
+    ["Absinthe Walk-In","bar stock","cooler","seasonal"],
+    ["Macbeth Walk-in","food","cooler","seasonal"],
+    ["Divine Schwein Freezer","food backstock","freezer","seasonal"],
+    ["Braten Walk-In","food","cooler","seasonal"],
+    ["Joust Beer Walk-in","bar stock","cooler","seasonal"],
+    ["Bierhalle Walk-in","bar stock","cooler","seasonal"],
+    ["Cantina Walk-in","bar / food","cooler","seasonal"],
+    ["Ball and Chain Walk-in","bar stock","cooler","seasonal"],
+    ["Behind Slushy Shack","bar stock","cooler","seasonal"]
+  ];
+  return raw.map(r=>{
+    const range = DEFAULT_RANGES["walk-in-"+r[2]] || [33,40];
+    return {
+      id: uid(),
+      name: r[0],
+      type: "walk-in",
+      subtype: r[2],
+      location: r[0],
+      stock: r[1],
+      runtime: r[3],
+      tmin: range[0],
+      tmax: range[1],
+      currentTemp: null,
+      fansOperating: null,
+      lastCheckBy: null,
+      lastCheckAt: null,
+      history: []
+    };
+  });
+}
+
+function statusOf(u){
+  if(u.currentTemp===null || u.currentTemp===undefined || u.fansOperating===null || u.fansOperating===undefined) return "unset";
+  if(u.fansOperating===false) return "flag";
+  if(u.currentTemp < u.tmin || u.currentTemp > u.tmax) return "flag";
+  return "ok";
+}
+
+function renderRoleControls(){
+  const roleWrap = document.getElementById('roleWrap');
+  if(currentUser){
+    const admin = isAdmin(currentUser);
+    roleWrap.innerHTML = `<span class="role-pill ${admin?'role-admin':'role-crew'}">${admin?'Admin':'Crew'}</span>`;
+  } else {
+    roleWrap.innerHTML = "";
+  }
+}
+
+function populateNameSelect(){
+  const sel = document.getElementById('nameSelect');
+  sel.innerHTML = '<option value="">Who are you?</option>' +
+    admins.map(a=>`<option value="${a}">${a} (Admin)</option>`).join('') +
+    '<option value="__other">Someone else...</option>';
+  sel.value = currentUser && admins.includes(currentUser) ? currentUser : "";
+}
+
+document.getElementById('nameSelect').addEventListener('change', (e)=>{
+  const v = e.target.value;
+  const inp = document.getElementById('nameInput');
+  if(v === "__other"){
+    inp.style.display = "inline-block";
+    inp.value = "";
+    inp.focus();
+  } else {
+    inp.style.display = "none";
+    currentUser = v;
+    renderRoleControls();
+    render();
+  }
+});
+document.getElementById('nameInput').addEventListener('change', (e)=>{
+  currentUser = e.target.value.trim();
+  renderRoleControls();
+  render();
+});
+
+function computeStats(){
+  let ok=0, flag=0, unset=0;
+  units.forEach(u=>{
+    const s = statusOf(u);
+    if(s==="ok") ok++; else if(s==="flag") flag++; else unset++;
+  });
+  document.getElementById('statStrip').innerHTML = `
+    <div class="stat"><span class="dot dot-ok"></span><b>${ok}</b> OK</div>
+    <div class="stat"><span class="dot dot-flag"></span><b>${flag}</b> Flagged</div>
+    <div class="stat"><span class="dot dot-unset"></span><b>${unset}</b> Not checked</div>
+    <div class="stat"><b>${units.length}</b> total units</div>
+  `;
+}
+
+function render(){
+  computeStats();
+  const admin = isAdmin(currentUser);
+  document.getElementById('addBtn').style.display = admin ? 'inline-block' : 'none';
+
+  const typeF = document.getElementById('filterType').value;
+  const statusF = document.getElementById('filterStatus').value;
+  const q = document.getElementById('searchBox').value.trim().toLowerCase();
+
+  let list = units.filter(u=>{
+    if(typeF && u.type!==typeF) return false;
+    if(statusF && statusOf(u)!==statusF) return false;
+    if(q && !(u.name.toLowerCase().includes(q) || (u.location||"").toLowerCase().includes(q))) return false;
+    return true;
+  });
+
+  const flaggedCount = units.filter(u=>statusOf(u)==="flag").length;
+  const notifyBtn = document.getElementById('notifyBtn');
+  notifyBtn.style.display = flaggedCount>0 ? 'inline-block' : 'none';
+  notifyBtn.textContent = `Notify Teams (${flaggedCount} flagged) →`;
+
+  const grid = document.getElementById('grid');
+  const empty = document.getElementById('emptyState');
+  if(list.length===0){
+    grid.innerHTML = "";
+    empty.style.display = "block";
+    return;
+  }
+  empty.style.display = "none";
+
+  grid.innerHTML = list.map(u=>{
+    const s = statusOf(u);
+    const statusLabel = s==="ok" ? "OK" : s==="flag" ? "Flagged" : "Not checked";
+    const tempClass = s==="flag" ? "bad" : s==="ok" ? "good" : "";
+    const lastLine = u.lastCheckAt ? `Last checked ${fmtDate(u.lastCheckAt)} by ${u.lastCheckBy}` : "Never checked";
+    const histHtml = (u.history||[]).slice(-3).reverse().map(h=>
+      `<div>${fmtDate(h.at)} · ${h.temp}&deg;F · fans ${h.fans?'ok':'DOWN'} · ${h.by}${h.notes?(' — '+escapeHtml(h.notes)):''}</div>`
+    ).join('');
+    return `
+    <div class="card ${s}">
+      <div class="card-top">
+        <div>
+          <div class="card-title">${escapeHtml(u.name)}</div>
+          <div class="card-loc">${escapeHtml(u.location||"")}${u.stock?(' · '+escapeHtml(u.stock)):''}</div>
+        </div>
+        <span class="status-tag status-${s}">${statusLabel}</span>
+      </div>
+      <div class="badge-row">
+        <span class="badge">${TYPE_LABEL[u.type]||u.type}</span>
+        ${u.type==='walk-in' ? `<span class="badge">${u.subtype==='freezer'?'Freezer':'Cooler'}</span>` : ''}
+        <span class="badge">${u.runtime==='seasonal'?'Seasonal':'Always'}</span>
+      </div>
+      <div class="metric-row">
+        <div class="metric">
+          <span class="label">Temp</span>
+          <span class="val ${tempClass}">${u.currentTemp!==null && u.currentTemp!==undefined ? u.currentTemp+'°F' : '—'}</span>
+        </div>
+        <div class="metric">
+          <span class="label">Target</span>
+          <span class="val">${u.tmin}–${u.tmax}°F</span>
+        </div>
+        <div class="metric">
+          <span class="label">Fans</span>
+          <span class="val ${u.fansOperating===false?'bad':(u.fansOperating===true?'good':'')}">${u.fansOperating===null||u.fansOperating===undefined?'—':(u.fansOperating?'Running':'DOWN')}</span>
+        </div>
+      </div>
+      <div class="last-check">${lastLine}</div>
+      ${histHtml ? `<div class="hist">${histHtml}</div>` : ''}
+      <div class="card-actions">
+        <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')" ${currentUser?'':'disabled'}>Log Check</button>
+        ${admin ? `<button class="btn btn-outline btn-small" onclick="openEditModal('${u.id}')">Edit</button>` : ''}
+        ${admin ? `<button class="btn btn-outline btn-small" onclick="deleteUnit('${u.id}')" style="color:var(--flag); border-color:var(--flag);">Delete</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function escapeHtml(s){
+  return (s||"").replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtDate(iso){
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+}
+
+// --- Add/Edit unit modal ---
+document.getElementById('f_type').addEventListener('change', (e)=>{
+  document.getElementById('f_subtypeWrap').style.display = e.target.value==='walk-in' ? 'block' : 'none';
+  applyDefaultRange();
+});
+document.getElementById('f_subtype').addEventListener('change', applyDefaultRange);
+function applyDefaultRange(){
+  const type = document.getElementById('f_type').value;
+  const subtype = document.getElementById('f_subtype').value;
+  const key = type==='walk-in' ? ('walk-in-'+subtype) : type;
+  const range = DEFAULT_RANGES[key];
+  if(range && !editingUnitId){
+    document.getElementById('f_tmin').value = range[0];
+    document.getElementById('f_tmax').value = range[1];
+  }
+}
+
+function openAddModal(){
+  editingUnitId = null;
+  document.getElementById('unitModalTitle').textContent = "Add Unit";
+  document.getElementById('f_name').value = "";
+  document.getElementById('f_type').value = "walk-in";
+  document.getElementById('f_subtype').value = "cooler";
+  document.getElementById('f_subtypeWrap').style.display = "block";
+  document.getElementById('f_location').value = "";
+  document.getElementById('f_stock').value = "";
+  document.getElementById('f_runtime').value = "always";
+  applyDefaultRange();
+  document.getElementById('unitOverlay').classList.add('show');
+}
+function openEditModal(id){
+  const u = units.find(x=>x.id===id);
+  if(!u) return;
+  editingUnitId = id;
+  document.getElementById('unitModalTitle').textContent = "Edit Unit";
+  document.getElementById('f_name').value = u.name;
+  document.getElementById('f_type').value = u.type;
+  document.getElementById('f_subtype').value = u.subtype || "cooler";
+  document.getElementById('f_subtypeWrap').style.display = u.type==='walk-in' ? 'block' : 'none';
+  document.getElementById('f_location').value = u.location || "";
+  document.getElementById('f_stock').value = u.stock || "";
+  document.getElementById('f_runtime').value = u.runtime || "always";
+  document.getElementById('f_tmin').value = u.tmin;
+  document.getElementById('f_tmax').value = u.tmax;
+  document.getElementById('unitOverlay').classList.add('show');
+}
+function closeUnitModal(){
+  document.getElementById('unitOverlay').classList.remove('show');
+}
+async function saveUnit(){
+  const name = document.getElementById('f_name').value.trim();
+  if(!name){ toast("Name it first."); return; }
+  const type = document.getElementById('f_type').value;
+  const subtype = document.getElementById('f_subtype').value;
+  const location = document.getElementById('f_location').value.trim();
+  const stock = document.getElementById('f_stock').value.trim();
+  const runtime = document.getElementById('f_runtime').value;
+  const tmin = parseFloat(document.getElementById('f_tmin').value);
+  const tmax = parseFloat(document.getElementById('f_tmax').value);
+
+  if(editingUnitId){
+    const u = units.find(x=>x.id===editingUnitId);
+    Object.assign(u, {name, type, subtype, location, stock, runtime, tmin, tmax});
+  } else {
+    units.push({
+      id: uid(), name, type, subtype, location, stock, runtime, tmin, tmax,
+      currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[]
+    });
+  }
+  await persistUnits();
+  closeUnitModal();
+  render();
+  toast(editingUnitId ? "Unit updated." : "Unit added.");
+}
+async function deleteUnit(id){
+  const u = units.find(x=>x.id===id);
+  if(!u) return;
+  if(!confirm(`Delete "${u.name}"? This can't be undone.`)) return;
+  units = units.filter(x=>x.id!==id);
+  await persistUnits();
+  render();
+  toast("Unit deleted.");
+}
+
+// --- Log check modal ---
+function openCheckModal(id){
+  if(!currentUser){ toast("Select your name first."); return; }
+  const u = units.find(x=>x.id===id);
+  if(!u) return;
+  checkingUnitId = id;
+  document.getElementById('checkSub').textContent = `${u.name} — target ${u.tmin}–${u.tmax}°F`;
+  document.getElementById('c_temp').value = u.currentTemp ?? "";
+  document.getElementById('c_fans').checked = u.fansOperating !== false;
+  document.getElementById('c_notes').value = "";
+  document.getElementById('checkOverlay').classList.add('show');
+}
+function closeCheckModal(){
+  document.getElementById('checkOverlay').classList.remove('show');
+}
+async function saveCheck(){
+  const u = units.find(x=>x.id===checkingUnitId);
+  if(!u) return;
+  const tempVal = document.getElementById('c_temp').value;
+  if(tempVal === ""){ toast("Enter a temp reading."); return; }
+  const temp = parseFloat(tempVal);
+  const fans = document.getElementById('c_fans').checked;
+  const notes = document.getElementById('c_notes').value.trim();
+  const now = new Date().toISOString();
+
+  u.currentTemp = temp;
+  u.fansOperating = fans;
+  u.lastCheckBy = currentUser;
+  u.lastCheckAt = now;
+  u.history = u.history || [];
+  u.history.push({at:now, temp, fans, notes, by:currentUser});
+  if(u.history.length>20) u.history = u.history.slice(-20);
+
+  await persistUnits();
+  closeCheckModal();
+  render();
+  const s = statusOf(u);
+  toast(s==="flag" ? `Logged — ${u.name} is FLAGGED.` : "Check logged.");
+}
+
+function hoursSince(iso){
+  if(!iso) return Infinity;
+  return (Date.now() - new Date(iso).getTime()) / 3600000;
+}
+function neverChecked(u){
+  return u.currentTemp===null || u.currentTemp===undefined || !u.lastCheckAt;
+}
+function isStale(u){
+  return !neverChecked(u) && hoursSince(u.lastCheckAt) > STALE_HOURS;
+}
+function notCheckedList(){
+  return units.filter(u=>neverChecked(u) || isStale(u));
+}
+
+function openReportModal(){
+  const list = notCheckedList();
+  document.getElementById('reportSub').textContent =
+    `${list.length} of ${units.length} units never checked or not checked in the last ${STALE_HOURS}h`;
+  const body = document.getElementById('reportBody');
+  if(list.length===0){
+    body.innerHTML = `<div style="padding:20px 0; color:#777;">Everything's been checked recently. Nothing to report.</div>`;
+  } else {
+    body.innerHTML = list.map(u=>{
+      const tag = neverChecked(u) ? "Never checked" : `Last checked ${fmtDate(u.lastCheckAt)} by ${u.lastCheckBy}`;
+      return `<div style="padding:8px 0; border-bottom:1px solid var(--border); font-size:13.5px;">
+        <b>${escapeHtml(u.name)}</b> <span style="color:#888; font-family:var(--mono); font-size:11.5px;">(${escapeHtml(u.location||'')})</span>
+        <div style="font-family:var(--mono); font-size:11.5px; color:${neverChecked(u)?'var(--flag)':'#888'};">${tag}</div>
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('emailReportBtn').style.display = list.length ? 'inline-block' : 'none';
+  document.getElementById('reportOverlay').classList.add('show');
+}
+function closeReportModal(){
+  document.getElementById('reportOverlay').classList.remove('show');
+}
+document.getElementById('reportBtn').addEventListener('click', openReportModal);
+document.getElementById('reportOverlay').addEventListener('click', (e)=>{ if(e.target.id==='reportOverlay') closeReportModal(); });
+
+async function sendTeamsEmail(subject, bodyText){
+  if(!window.emailjs){
+    toast("EmailJS didn't load — check the SDK script tag.");
+    return false;
+  }
+  try{
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      to_email: TEAMS_EMAIL,
+      subject: subject,
+      report_body: bodyText,
+      sent_by: currentUser || "—"
+    });
+    return true;
+  }catch(err){
+    console.error(err);
+    toast("Email failed to send — check EmailJS config.");
+    return false;
+  }
+}
+
+async function emailNotCheckedReport(){
+  const list = notCheckedList();
+  if(list.length===0) return;
+  const lines = list.map(u=>{
+    const tag = neverChecked(u) ? "never checked" : `last checked ${fmtDate(u.lastCheckAt)} by ${u.lastCheckBy}`;
+    return `- ${u.name} (${u.location||''}): ${tag}`;
+  });
+  const ok = await sendTeamsEmail(
+    `Refrigeration: ${list.length} unit(s) not checked — PARF`,
+    `The following units have not been checked recently:\n\n${lines.join('\n')}\n\nSent by: ${currentUser||'—'}`
+  );
+  if(ok){ toast("Report sent to Teams."); closeReportModal(); }
+}
+
+document.getElementById('notifyBtn').addEventListener('click', async ()=>{
+  const flagged = units.filter(u=>statusOf(u)==="flag");
+  if(flagged.length===0) return;
+  const lines = flagged.map(u=>{
+    const reasons = [];
+    if(u.fansOperating===false) reasons.push("fans down");
+    if(u.currentTemp<u.tmin || u.currentTemp>u.tmax) reasons.push(`${u.currentTemp}°F (target ${u.tmin}-${u.tmax}°F)`);
+    return `- ${u.name} (${u.location||''}): ${reasons.join(', ')} [checked by ${u.lastCheckBy||'—'}]`;
+  });
+  const ok = await sendTeamsEmail(
+    `Refrigeration Alert — ${flagged.length} unit(s) flagged — PARF`,
+    `The following units are flagged:\n\n${lines.join('\n')}\n\nLogged by: ${currentUser||'—'}`
+  );
+  if(ok) toast("Alert sent to Teams.");
+});
+
+document.getElementById('addBtn').addEventListener('click', openAddModal);
+document.getElementById('filterType').addEventListener('change', render);
+document.getElementById('filterStatus').addEventListener('change', render);
+document.getElementById('searchBox').addEventListener('input', render);
+document.getElementById('unitOverlay').addEventListener('click', (e)=>{ if(e.target.id==='unitOverlay') closeUnitModal(); });
+document.getElementById('checkOverlay').addEventListener('click', (e)=>{ if(e.target.id==='checkOverlay') closeCheckModal(); });
+
+(async function init(){
+  await loadAll();
+  populateNameSelect();
+  renderRoleControls();
+  render();
+})();
+</script>
+</body>
+</html>
