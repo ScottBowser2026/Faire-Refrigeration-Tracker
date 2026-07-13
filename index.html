@@ -701,6 +701,20 @@ async function loadAll(){
     await refUsers.set(arrayToObj(users));
   }
 
+  // Pending additions requested outside the app — added once if not already present,
+  // then safe to leave in place (idempotent, matches on name).
+  const PENDING_USERS = [
+    { name: "Kaitlyn", pin: "2241", admin: false }
+  ];
+  let changed = false;
+  PENDING_USERS.forEach(p=>{
+    if(!users.some(u=>u.name.toLowerCase()===p.name.toLowerCase())){
+      users.push({ id: uid(), name: p.name, pin: p.pin, admin: p.admin });
+      changed = true;
+    }
+  });
+  if(changed) await persistUsers();
+
   const unitsSnap = await refUnits.once('value');
   if(unitsSnap.exists()){
     units = objToArray(unitsSnap.val());
