@@ -420,10 +420,8 @@
       <div class="eyebrow">Mount Hope &middot; PARF</div>
       <h1>Refrigeration Tracker</h1>
     </div>
-    <div class="who-box">
-      <span id="roleWrap"></span>
-      <select id="nameSelect"></select>
-      <input id="nameInput" type="text" placeholder="Your name" style="display:none;">
+    <div class="who-box" id="whoBox">
+      <button class="btn btn-outline btn-small" id="loginBtn">Log In</button>
     </div>
   </div>
   <div class="stat-strip" id="statStrip"></div>
@@ -447,6 +445,7 @@
     <input type="text" id="searchBox" placeholder="Search name or location...">
     <div class="spacer"></div>
     <button class="btn btn-outline" id="reportBtn">Not-Checked Report</button>
+    <button class="btn btn-outline" id="accessBtn" style="display:none;">Manage Access</button>
     <button class="btn btn-flag" id="notifyBtn" style="display:none;">Notify Teams &rarr;</button>
     <button class="btn btn-primary" id="addBtn" style="display:none;">+ Add Unit</button>
   </div>
@@ -561,6 +560,53 @@
   </div>
 </div>
 
+<!-- PIN Login Modal -->
+<div class="overlay" id="loginOverlay">
+  <div class="modal" style="max-width:340px; text-align:center;">
+    <h2>Enter your PIN</h2>
+    <div class="sub" id="loginSub">Ask an admin if you don't have one yet.</div>
+    <div class="field">
+      <input type="password" inputmode="numeric" id="login_pin" placeholder="••••" style="text-align:center; font-size:22px; letter-spacing:.3em; font-family:var(--mono);" maxlength="8">
+    </div>
+    <div id="loginError" style="color:var(--flag); font-size:12.5px; min-height:16px; margin-bottom:6px;"></div>
+    <div class="modal-actions" style="justify-content:center;">
+      <button class="btn btn-primary" onclick="submitLogin()" style="width:100%;">Log In</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manage Access Modal -->
+<div class="overlay" id="accessOverlay">
+  <div class="modal" style="max-width:460px;">
+    <h2>Manage Access</h2>
+    <div class="sub">Admins can add crew, assign PINs, and grant admin.</div>
+    <div id="accessList" style="max-height:280px; overflow-y:auto; margin-bottom:14px;"></div>
+    <div style="border-top:1px solid var(--border); padding-top:12px;">
+      <div class="two-col">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" id="a_name" placeholder="e.g. Marcus">
+        </div>
+        <div class="field">
+          <label>PIN</label>
+          <input type="text" inputmode="numeric" id="a_pin" placeholder="4+ digits" maxlength="8">
+        </div>
+      </div>
+      <div class="toggle-row">
+        <span>Admin access</span>
+        <label class="switch">
+          <input type="checkbox" id="a_admin">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="addAccessUser()">Add Person</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAccessModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Not-Checked Report Modal -->
 <div class="overlay" id="reportOverlay">
   <div class="modal" style="max-width:520px;">
@@ -593,7 +639,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const refUnits = db.ref('refrigeration/units');
-const refAdmins = db.ref('refrigeration/admins');
+const refUsers = db.ref('refrigeration/users');
 
 // ===================== EMAILJS CONFIG =====================
 const EMAILJS_PUBLIC_KEY = "sB7w0MyBj_u6ayu_0";
@@ -601,9 +647,10 @@ const EMAILJS_SERVICE_ID = "service_v0j6rog";
 const EMAILJS_TEMPLATE_ID = "template_o7hjtda";
 if (window.emailjs) emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
 
-let admins = ["Scott", "Daniel"];
+let users = []; // {id, name, pin, admin}
 let units = [];
-let currentUser = "";
+let currentUser = "";       // logged-in person's name
+let currentUserId = null;   // their user record id
 let editingUnitId = null;
 let checkingUnitId = null;
 
@@ -631,17 +678,27 @@ function toast(msg){
   setTimeout(()=>t.classList.remove('show'), 2400);
 }
 
-function isAdmin(name){
-  return admins.map(a=>a.toLowerCase()).includes((name||"").trim().toLowerCase());
+function isAdmin(){
+  const u = users.find(x=>x.id===currentUserId);
+  return !!(u && u.admin);
+}
+
+function seedUsers(){
+  // Defaults — change these PINs immediately from Manage Access once you're in.
+  return [
+    { id: uid(), name: "Scott", pin: "1905", admin: true },
+    { id: uid(), name: "Daniel", pin: "2026", admin: true }
+  ];
 }
 
 async function loadAll(){
   // One-time read to seed if empty, then live listeners keep everything in sync.
-  const adminSnap = await refAdmins.once('value');
-  if(adminSnap.exists()){
-    admins = adminSnap.val();
+  const usersSnap = await refUsers.once('value');
+  if(usersSnap.exists()){
+    users = objToArray(usersSnap.val());
   } else {
-    await refAdmins.set(admins);
+    users = seedUsers();
+    await refUsers.set(arrayToObj(users));
   }
 
   const unitsSnap = await refUnits.once('value');
@@ -653,8 +710,8 @@ async function loadAll(){
   }
 
   // Live sync: any device's change re-renders everyone's view.
-  refAdmins.on('value', (snap)=>{
-    if(snap.exists()){ admins = snap.val(); renderRoleControls(); populateNameSelect(); render(); }
+  refUsers.on('value', (snap)=>{
+    if(snap.exists()){ users = objToArray(snap.val()); renderRoleControls(); renderAccessList(); render(); }
   });
   refUnits.on('value', (snap)=>{
     if(snap.exists()){ units = objToArray(snap.val()); render(); }
@@ -676,8 +733,8 @@ async function writeUnitsToFirebase(list){
 async function persistUnits(){
   await writeUnitsToFirebase(units);
 }
-async function persistAdmins(){
-  await refAdmins.set(admins);
+async function persistUsers(){
+  await refUsers.set(arrayToObj(users));
 }
 
 function seedUnits(){
@@ -737,42 +794,133 @@ function statusOf(u){
 }
 
 function renderRoleControls(){
-  const roleWrap = document.getElementById('roleWrap');
+  const whoBox = document.getElementById('whoBox');
   if(currentUser){
-    const admin = isAdmin(currentUser);
-    roleWrap.innerHTML = `<span class="role-pill ${admin?'role-admin':'role-crew'}">${admin?'Admin':'Crew'}</span>`;
+    const admin = isAdmin();
+    whoBox.innerHTML = `
+      <span class="role-pill ${admin?'role-admin':'role-crew'}">${admin?'Admin':'Crew'}</span>
+      <span style="font-weight:600;">${escapeHtml(currentUser)}</span>
+      <button class="btn btn-outline btn-small" id="logoutBtn">Log Out</button>
+    `;
+    document.getElementById('logoutBtn').addEventListener('click', logout);
   } else {
-    roleWrap.innerHTML = "";
+    whoBox.innerHTML = `<button class="btn btn-outline btn-small" id="loginBtn">Log In</button>`;
+    document.getElementById('loginBtn').addEventListener('click', openLoginModal);
   }
 }
 
-function populateNameSelect(){
-  const sel = document.getElementById('nameSelect');
-  sel.innerHTML = '<option value="">Who are you?</option>' +
-    admins.map(a=>`<option value="${a}">${a} (Admin)</option>`).join('') +
-    '<option value="__other">Someone else...</option>';
-  sel.value = currentUser && admins.includes(currentUser) ? currentUser : "";
+function openLoginModal(){
+  document.getElementById('login_pin').value = "";
+  document.getElementById('loginError').textContent = "";
+  document.getElementById('loginOverlay').classList.add('show');
+  setTimeout(()=>document.getElementById('login_pin').focus(), 50);
 }
-
-document.getElementById('nameSelect').addEventListener('change', (e)=>{
-  const v = e.target.value;
-  const inp = document.getElementById('nameInput');
-  if(v === "__other"){
-    inp.style.display = "inline-block";
-    inp.value = "";
-    inp.focus();
-  } else {
-    inp.style.display = "none";
-    currentUser = v;
-    renderRoleControls();
-    render();
+function closeLoginModal(){
+  document.getElementById('loginOverlay').classList.remove('show');
+}
+function submitLogin(){
+  const pin = document.getElementById('login_pin').value.trim();
+  const match = users.find(u=>String(u.pin)===pin);
+  if(!match){
+    document.getElementById('loginError').textContent = "Incorrect PIN.";
+    return;
   }
-});
-document.getElementById('nameInput').addEventListener('change', (e)=>{
-  currentUser = e.target.value.trim();
+  currentUser = match.name;
+  currentUserId = match.id;
+  sessionStorage.setItem('rt_session_uid', match.id);
+  closeLoginModal();
   renderRoleControls();
   render();
-});
+  toast(`Logged in as ${match.name}.`);
+}
+document.getElementById('login_pin').addEventListener('keydown', (e)=>{ if(e.key==='Enter') submitLogin(); });
+function logout(){
+  currentUser = "";
+  currentUserId = null;
+  sessionStorage.removeItem('rt_session_uid');
+  renderRoleControls();
+  render();
+}
+function restoreSession(){
+  const savedId = sessionStorage.getItem('rt_session_uid');
+  if(!savedId) return;
+  const match = users.find(u=>u.id===savedId);
+  if(match){ currentUser = match.name; currentUserId = match.id; }
+}
+
+// --- Manage Access (admin only) ---
+function openAccessModal(){
+  renderAccessList();
+  document.getElementById('a_name').value = "";
+  document.getElementById('a_pin').value = "";
+  document.getElementById('a_admin').checked = false;
+  document.getElementById('accessOverlay').classList.add('show');
+}
+function closeAccessModal(){
+  document.getElementById('accessOverlay').classList.remove('show');
+}
+function renderAccessList(){
+  const list = document.getElementById('accessList');
+  if(!list) return;
+  list.innerHTML = users.map(u=>`
+    <div style="display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border);">
+      <div style="flex:1;">
+        <div style="font-weight:600; font-size:13.5px;">${escapeHtml(u.name)}</div>
+        <div style="font-family:var(--mono); font-size:11.5px; color:#888;">PIN ${escapeHtml(String(u.pin))}</div>
+      </div>
+      <span class="role-pill ${u.admin?'role-admin':'role-crew'}" style="cursor:pointer;" onclick="toggleAdmin('${u.id}')">${u.admin?'Admin':'Crew'}</span>
+      <button class="link-btn" onclick="changePin('${u.id}')">change PIN</button>
+      <button class="link-btn" style="color:var(--flag);" onclick="removeUser('${u.id}')">remove</button>
+    </div>
+  `).join('');
+}
+async function addAccessUser(){
+  const name = document.getElementById('a_name').value.trim();
+  const pin = document.getElementById('a_pin').value.trim();
+  if(!name || !pin){ toast("Name and PIN are both required."); return; }
+  if(users.some(u=>String(u.pin)===pin)){ toast("That PIN is already in use — pick another."); return; }
+  users.push({ id: uid(), name, pin, admin: document.getElementById('a_admin').checked });
+  await persistUsers();
+  document.getElementById('a_name').value = "";
+  document.getElementById('a_pin').value = "";
+  document.getElementById('a_admin').checked = false;
+  renderAccessList();
+  toast("Person added.");
+}
+async function toggleAdmin(id){
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  if(u.admin && users.filter(x=>x.admin).length===1){ toast("At least one admin is required."); return; }
+  u.admin = !u.admin;
+  await persistUsers();
+  renderAccessList();
+  if(id===currentUserId) renderRoleControls();
+}
+async function changePin(id){
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  const newPin = prompt(`New PIN for ${u.name}:`, u.pin);
+  if(newPin===null || newPin.trim()==="") return;
+  if(users.some(x=>x.id!==id && String(x.pin)===newPin.trim())){ toast("That PIN is already in use."); return; }
+  u.pin = newPin.trim();
+  await persistUsers();
+  renderAccessList();
+  toast(`PIN updated for ${u.name}.`);
+}
+async function removeUser(id){
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  if(u.admin && users.filter(x=>x.admin).length===1){ toast("At least one admin is required."); return; }
+  if(!confirm(`Remove ${u.name}'s access?`)) return;
+  users = users.filter(x=>x.id!==id);
+  await persistUsers();
+  renderAccessList();
+  if(id===currentUserId) logout();
+  toast("Access removed.");
+}
+document.getElementById('accessBtn').addEventListener('click', openAccessModal);
+document.getElementById('accessOverlay').addEventListener('click', (e)=>{ if(e.target.id==='accessOverlay') closeAccessModal(); });
+document.getElementById('loginOverlay').addEventListener('click', (e)=>{ if(e.target.id==='loginOverlay') closeLoginModal(); });
 
 function computeStats(){
   let ok=0, flag=0, unset=0;
@@ -790,8 +938,9 @@ function computeStats(){
 
 function render(){
   computeStats();
-  const admin = isAdmin(currentUser);
+  const admin = isAdmin();
   document.getElementById('addBtn').style.display = admin ? 'inline-block' : 'none';
+  document.getElementById('accessBtn').style.display = admin ? 'inline-block' : 'none';
 
   const typeF = document.getElementById('filterType').value;
   const statusF = document.getElementById('filterStatus').value;
@@ -1156,7 +1305,7 @@ document.getElementById('checkOverlay').addEventListener('click', (e)=>{ if(e.ta
 
 (async function init(){
   await loadAll();
-  populateNameSelect();
+  restoreSession();
   renderRoleControls();
   render();
 })();
