@@ -116,6 +116,23 @@
   @media (max-width: 480px){
     .header-row{ flex-direction:column; align-items:stretch; }
     .who-box{ justify-content:flex-start; width:100%; }
+    header{ padding:14px 14px 12px; }
+    .brand h1{ font-size:19px; }
+  }
+  @media (max-width: 640px){
+    main{ padding:14px 12px 90px; }
+    .toolbar{ gap:8px; }
+    .toolbar select, .toolbar input[type="text"]{ flex:1 1 auto; min-width:0; }
+    .toolbar .btn{ flex:1 1 auto; }
+    .spacer{ flex-basis:100%; height:0; }
+    #searchBox{ width:100%; order:1; }
+    .grid{ grid-template-columns:1fr; gap:12px; }
+    .card-actions{ gap:6px; }
+    .card-actions .btn{ flex:1 1 auto; }
+    .modal{ padding:18px 16px 16px; }
+    .two-col{ grid-template-columns:1fr; }
+    .modal-actions{ flex-wrap:wrap; }
+    .modal-actions .btn{ flex:1 1 auto; }
   }
   .role-pill{
     font-family:var(--mono);
@@ -165,11 +182,11 @@
     margin-bottom:16px;
   }
   .toolbar select, .toolbar input[type="text"]{
-    padding:9px 11px;
+    padding:10px 11px;
     border:1px solid var(--border);
     border-radius:8px;
     font-family:var(--sans);
-    font-size:13px;
+    font-size:16px;
     background:var(--card);
     color:var(--ink);
   }
@@ -182,9 +199,12 @@
     border:none;
     border-radius:8px;
     padding:10px 16px;
-    font-size:13px;
+    min-height:42px;
+    font-size:13.5px;
     font-weight:600;
     letter-spacing:.01em;
+    -webkit-tap-highlight-color:transparent;
+    touch-action:manipulation;
   }
   .btn-primary{background:var(--steel-2); color:var(--paper);}
   .btn-primary:hover{background:var(--steel);}
@@ -192,7 +212,7 @@
   .btn-outline:hover{background:#e2e6de;}
   .btn-flag{background:var(--flag); color:#fff;}
   .btn-flag:hover{background:#8c3627;}
-  .btn-small{padding:6px 11px; font-size:12px; border-radius:6px;}
+  .btn-small{padding:7px 12px; min-height:36px; font-size:12.5px; border-radius:6px;}
   .btn:disabled{opacity:.45; cursor:not-allowed;}
 
   .grid{
@@ -324,10 +344,10 @@
   }
   .field input, .field select, .field textarea{
     width:100%;
-    padding:9px 10px;
+    padding:10px 10px;
     border:1px solid var(--border);
     border-radius:7px;
-    font-size:14px;
+    font-size:16px;
     font-family:var(--sans);
   }
   .field textarea{resize:vertical; min-height:56px;}
@@ -419,8 +439,9 @@
   .hist div{margin-bottom:3px;}
   .link-btn{
     background:none; border:none; color:var(--frost-deep);
-    font-family:var(--mono); font-size:11px; text-decoration:underline;
-    padding:0; cursor:pointer;
+    font-family:var(--mono); font-size:12px; text-decoration:underline;
+    padding:6px 2px; cursor:pointer; min-height:30px;
+    -webkit-tap-highlight-color:transparent;
   }
 </style>
 </head>
@@ -957,8 +978,8 @@ function renderAccessList(){
       : (!u.admin ? `<div style="font-family:var(--mono); font-size:11px; color:#888;">sees all units</div>` : '');
     return `
     <div style="padding:8px 0; border-bottom:1px solid var(--border);">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <div style="flex:1;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:120px;">
           <div style="font-weight:600; font-size:13.5px;">${escapeHtml(u.name)}</div>
           <div style="font-family:var(--mono); font-size:11.5px; color:#888;">PIN ${escapeHtml(String(u.pin))}</div>
         </div>
