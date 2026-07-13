@@ -613,6 +613,22 @@
   </div>
 </div>
 
+<!-- Assign Units Modal (per crew member) -->
+<div class="overlay" id="assignOverlay">
+  <div class="modal" style="max-width:420px;">
+    <h2>Assign Units</h2>
+    <div class="sub" id="assignSub"></div>
+    <div style="font-size:12.5px; color:#777; margin-bottom:10px;">
+      Leave nothing checked to give this person the full dashboard. Check specific units to limit them to just those.
+    </div>
+    <div id="assignList" style="max-height:280px; overflow-y:auto; margin-bottom:14px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAssignModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveAssignment()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Not-Checked Report Modal -->
 <div class="overlay" id="reportOverlay">
   <div class="modal" style="max-width:520px;">
@@ -903,17 +919,24 @@ function closeAccessModal(){
 function renderAccessList(){
   const list = document.getElementById('accessList');
   if(!list) return;
-  list.innerHTML = users.map(u=>`
-    <div style="display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border);">
-      <div style="flex:1;">
-        <div style="font-weight:600; font-size:13.5px;">${escapeHtml(u.name)}</div>
-        <div style="font-family:var(--mono); font-size:11.5px; color:#888;">PIN ${escapeHtml(String(u.pin))}</div>
+  list.innerHTML = users.map(u=>{
+    const scopeNote = (!u.admin && u.assignedUnits && u.assignedUnits.length)
+      ? `<div style="font-family:var(--mono); font-size:11px; color:var(--frost-deep);">${u.assignedUnits.length} unit(s) assigned</div>`
+      : (!u.admin ? `<div style="font-family:var(--mono); font-size:11px; color:#888;">sees all units</div>` : '');
+    return `
+    <div style="padding:8px 0; border-bottom:1px solid var(--border);">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="flex:1;">
+          <div style="font-weight:600; font-size:13.5px;">${escapeHtml(u.name)}</div>
+          <div style="font-family:var(--mono); font-size:11.5px; color:#888;">PIN ${escapeHtml(String(u.pin))}</div>
+        </div>
+        <span class="role-pill ${u.admin?'role-admin':'role-crew'}" style="cursor:pointer;" onclick="toggleAdmin('${u.id}')">${u.admin?'Admin':'Crew'}</span>
+        <button class="link-btn" onclick="changePin('${u.id}')">change PIN</button>
+        <button class="link-btn" style="color:var(--flag);" onclick="removeUser('${u.id}')">remove</button>
       </div>
-      <span class="role-pill ${u.admin?'role-admin':'role-crew'}" style="cursor:pointer;" onclick="toggleAdmin('${u.id}')">${u.admin?'Admin':'Crew'}</span>
-      <button class="link-btn" onclick="changePin('${u.id}')">change PIN</button>
-      <button class="link-btn" style="color:var(--flag);" onclick="removeUser('${u.id}')">remove</button>
-    </div>
-  `).join('');
+      ${!u.admin ? `<div style="padding-left:2px; margin-top:2px;">${scopeNote} <button class="link-btn" onclick="openAssignModal('${u.id}')">assign units</button></div>` : ''}
+    </div>`;
+  }).join('');
 }
 async function addAccessUser(){
   const name = document.getElementById('a_name').value.trim();
@@ -962,9 +985,49 @@ async function removeUser(id){
 document.getElementById('accessBtn').addEventListener('click', openAccessModal);
 document.getElementById('accessOverlay').addEventListener('click', (e)=>{ if(e.target.id==='accessOverlay') closeAccessModal(); });
 
+let assigningUserId = null;
+function openAssignModal(userId){
+  const u = users.find(x=>x.id===userId);
+  if(!u) return;
+  assigningUserId = userId;
+  document.getElementById('assignSub').textContent = `For ${u.name}`;
+  const assigned = u.assignedUnits || [];
+  const list = document.getElementById('assignList');
+  list.innerHTML = units.map(unit=>`
+    <label style="display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13.5px; cursor:pointer;">
+      <input type="checkbox" value="${unit.id}" ${assigned.includes(unit.id)?'checked':''} style="width:16px; height:16px;">
+      <span>${escapeHtml(unit.name)} <span style="color:#888; font-family:var(--mono); font-size:11px;">(${escapeHtml(unit.location||'')})</span></span>
+    </label>
+  `).join('');
+  document.getElementById('assignOverlay').classList.add('show');
+}
+function closeAssignModal(){
+  document.getElementById('assignOverlay').classList.remove('show');
+  assigningUserId = null;
+}
+async function saveAssignment(){
+  const u = users.find(x=>x.id===assigningUserId);
+  if(!u) return;
+  const checked = Array.from(document.querySelectorAll('#assignList input[type="checkbox"]:checked')).map(el=>el.value);
+  u.assignedUnits = checked;
+  await persistUsers();
+  renderAccessList();
+  closeAssignModal();
+  toast(checked.length ? `${u.name} now sees ${checked.length} unit(s).` : `${u.name} now sees the full dashboard.`);
+  if(u.id===currentUserId) render();
+}
+document.getElementById('assignOverlay').addEventListener('click', (e)=>{ if(e.target.id==='assignOverlay') closeAssignModal(); });
+
+function visibleUnits(){
+  const u = users.find(x=>x.id===currentUserId);
+  if(isAdmin() || !u || !u.assignedUnits || u.assignedUnits.length===0) return units;
+  return units.filter(x=>u.assignedUnits.includes(x.id));
+}
+
 function computeStats(){
+  const scoped = visibleUnits();
   let ok=0, flag=0, unset=0;
-  units.forEach(u=>{
+  scoped.forEach(u=>{
     const s = statusOf(u);
     if(s==="ok") ok++; else if(s==="flag") flag++; else unset++;
   });
@@ -972,7 +1035,7 @@ function computeStats(){
     <div class="stat"><span class="dot dot-ok"></span><b>${ok}</b> OK</div>
     <div class="stat"><span class="dot dot-flag"></span><b>${flag}</b> Flagged</div>
     <div class="stat"><span class="dot dot-unset"></span><b>${unset}</b> Not checked</div>
-    <div class="stat"><b>${units.length}</b> total units</div>
+    <div class="stat"><b>${scoped.length}</b> total units</div>
   `;
 }
 
@@ -986,14 +1049,14 @@ function render(){
   const statusF = document.getElementById('filterStatus').value;
   const q = document.getElementById('searchBox').value.trim().toLowerCase();
 
-  let list = units.filter(u=>{
+  let list = visibleUnits().filter(u=>{
     if(typeF && u.type!==typeF) return false;
     if(statusF && statusOf(u)!==statusF) return false;
     if(q && !(u.name.toLowerCase().includes(q) || (u.location||"").toLowerCase().includes(q))) return false;
     return true;
   });
 
-  const flaggedCount = units.filter(u=>statusOf(u)==="flag").length;
+  const flaggedCount = visibleUnits().filter(u=>statusOf(u)==="flag").length;
   const notifyBtn = document.getElementById('notifyBtn');
   notifyBtn.style.display = flaggedCount>0 ? 'inline-block' : 'none';
   notifyBtn.textContent = `Notify Teams (${flaggedCount} flagged) →`;
@@ -1258,7 +1321,7 @@ function isStale(u){
   return !neverChecked(u) && hoursSince(u.lastCheckAt) > STALE_HOURS;
 }
 function notCheckedList(){
-  return units.filter(u=>neverChecked(u) || isStale(u));
+  return visibleUnits().filter(u=>neverChecked(u) || isStale(u));
 }
 
 function openReportModal(){
@@ -1321,7 +1384,7 @@ async function emailNotCheckedReport(){
 }
 
 document.getElementById('notifyBtn').addEventListener('click', async ()=>{
-  const flagged = units.filter(u=>statusOf(u)==="flag");
+  const flagged = visibleUnits().filter(u=>statusOf(u)==="flag");
   if(flagged.length===0) return;
   const lines = flagged.map(u=>{
     const reasons = [];
