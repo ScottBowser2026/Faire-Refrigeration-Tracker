@@ -107,6 +107,12 @@
     font-family:var(--mono);
     font-size:13px;
   }
+  .who-btn{
+    background:var(--steel);
+    border:1px solid #4d5b55;
+    color:var(--paper) !important;
+  }
+  .who-btn:hover{background:#4d5b55;}
   @media (max-width: 480px){
     .header-row{ flex-direction:column; align-items:stretch; }
     .who-box{ justify-content:flex-start; width:100%; }
@@ -427,7 +433,7 @@
       <h1>Refrigeration Tracker</h1>
     </div>
     <div class="who-box" id="whoBox">
-      <button class="btn btn-outline btn-small" id="loginBtn">Log In</button>
+      <button class="btn who-btn btn-small" id="loginBtn">Log In</button>
     </div>
   </div>
   <div class="stat-strip" id="statStrip" style="display:none;"></div>
@@ -851,11 +857,11 @@ function renderRoleControls(){
     whoBox.innerHTML = `
       <span class="role-pill ${admin?'role-admin':'role-crew'}">${admin?'Admin':'Crew'}</span>
       <span style="font-weight:600;">${escapeHtml(currentUser)}</span>
-      <button class="btn btn-outline btn-small" id="logoutBtn">Log Out</button>
+      <button class="btn who-btn btn-small" id="logoutBtn">Log Out</button>
     `;
     document.getElementById('logoutBtn').addEventListener('click', logout);
   } else {
-    whoBox.innerHTML = `<button class="btn btn-outline btn-small" id="loginBtn">Log In</button>`;
+    whoBox.innerHTML = `<button class="btn who-btn btn-small" id="loginBtn">Log In</button>`;
     document.getElementById('loginBtn').addEventListener('click', openLoginModal);
   }
 }
