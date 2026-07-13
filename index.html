@@ -540,6 +540,11 @@
       <label>Notes (optional)</label>
       <textarea id="c_notes" placeholder="anything the next person should know"></textarea>
     </div>
+    <div class="field">
+      <label>Photo (optional)</label>
+      <input type="file" id="c_photo" accept="image/*" capture="environment">
+      <div id="c_photo_preview" style="margin-top:8px;"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeCheckModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveCheck()">Save Check</button>
@@ -548,6 +553,13 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Photo Lightbox -->
+<div class="overlay" id="lightboxOverlay" onclick="closeLightbox()">
+  <div style="max-width:90vw; max-height:88vh;">
+    <img id="lightboxImg" src="" style="max-width:90vw; max-height:88vh; border-radius:8px; display:block;">
+  </div>
+</div>
 
 <!-- Not-Checked Report Modal -->
 <div class="overlay" id="reportOverlay">
@@ -812,8 +824,9 @@ function render(){
     const tempClass = s==="flag" ? "bad" : s==="ok" ? "good" : "";
     const lastLine = u.lastCheckAt ? `Last checked ${fmtDate(u.lastCheckAt)} by ${u.lastCheckBy}` : "Never checked";
     const histHtml = (u.history||[]).slice(-3).reverse().map(h=>
-      `<div>${fmtDate(h.at)} · ${h.temp}&deg;F · fans ${h.fans?'ok':'DOWN'} · ${h.by}${h.notes?(' — '+escapeHtml(h.notes)):''}</div>`
+      `<div>${fmtDate(h.at)} · ${h.temp}&deg;F · fans ${h.fans?'ok':'DOWN'} · ${h.by}${h.notes?(' — '+escapeHtml(h.notes)):''}${h.photo?` · <button class="link-btn" onclick="openLightbox(this.dataset.src)" data-src="${h.photo}">photo</button>`:''}</div>`
     ).join('');
+    const thumbHtml = u.lastPhoto ? `<img src="${u.lastPhoto}" onclick="openLightbox(this.src)" style="width:100%; max-height:130px; object-fit:cover; border-radius:7px; cursor:pointer; margin-top:2px;">` : '';
     return `
     <div class="card ${s}">
       <div class="card-top">
@@ -828,6 +841,7 @@ function render(){
         ${u.type==='walk-in' ? `<span class="badge">${u.subtype==='freezer'?'Freezer':'Cooler'}</span>` : ''}
         <span class="badge">${u.runtime==='seasonal'?'Seasonal':'Always'}</span>
       </div>
+      ${thumbHtml}
       <div class="metric-row">
         <div class="metric">
           <span class="label">Temp</span>
@@ -946,6 +960,56 @@ async function deleteUnit(id){
 }
 
 // --- Log check modal ---
+// --- Photo handling: compress client-side, store as base64 (no Storage/Blaze plan needed) ---
+let pendingPhoto = null; // base64 string for the check currently being logged
+
+function compressImage(file, maxDim, quality){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e)=>{ img.src = e.target.result; };
+    reader.onerror = reject;
+    img.onload = ()=>{
+      let { width, height } = img;
+      if(width > height && width > maxDim){
+        height = Math.round(height * (maxDim/width)); width = maxDim;
+      } else if(height > maxDim){
+        width = Math.round(width * (maxDim/height)); height = maxDim;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('c_photo').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  const preview = document.getElementById('c_photo_preview');
+  if(!file){ pendingPhoto = null; preview.innerHTML = ""; return; }
+  preview.innerHTML = `<span style="font-size:12px; color:#888;">Compressing…</span>`;
+  try{
+    pendingPhoto = await compressImage(file, 900, 0.55);
+    preview.innerHTML = `<img src="${pendingPhoto}" style="max-width:100%; max-height:160px; border-radius:6px; display:block;">`;
+  }catch(err){
+    console.error(err);
+    pendingPhoto = null;
+    preview.innerHTML = `<span style="font-size:12px; color:var(--flag);">Couldn't read that photo — try again.</span>`;
+  }
+});
+
+function openLightbox(src){
+  document.getElementById('lightboxImg').src = src;
+  document.getElementById('lightboxOverlay').classList.add('show');
+}
+function closeLightbox(){
+  document.getElementById('lightboxOverlay').classList.remove('show');
+  document.getElementById('lightboxImg').src = "";
+}
+
 function openCheckModal(id){
   if(!currentUser){ toast("Select your name first."); return; }
   const u = units.find(x=>x.id===id);
@@ -955,6 +1019,9 @@ function openCheckModal(id){
   document.getElementById('c_temp').value = u.currentTemp ?? "";
   document.getElementById('c_fans').checked = u.fansOperating !== false;
   document.getElementById('c_notes').value = "";
+  document.getElementById('c_photo').value = "";
+  document.getElementById('c_photo_preview').innerHTML = "";
+  pendingPhoto = null;
   document.getElementById('checkOverlay').classList.add('show');
 }
 function closeCheckModal(){
@@ -968,15 +1035,21 @@ async function saveCheck(){
   const temp = parseFloat(tempVal);
   const fans = document.getElementById('c_fans').checked;
   const notes = document.getElementById('c_notes').value.trim();
+  const photo = pendingPhoto;
   const now = new Date().toISOString();
 
   u.currentTemp = temp;
   u.fansOperating = fans;
   u.lastCheckBy = currentUser;
   u.lastCheckAt = now;
+  if(photo) u.lastPhoto = photo;
   u.history = u.history || [];
-  u.history.push({at:now, temp, fans, notes, by:currentUser});
+  u.history.push({at:now, temp, fans, notes, by:currentUser, photo: photo || null});
   if(u.history.length>20) u.history = u.history.slice(-20);
+  // Keep photos on only the 5 most recent entries so a unit's record doesn't
+  // balloon in size — older photos are dropped but temp/fan/notes history stays.
+  const keepPhotosFrom = Math.max(0, u.history.length - 5);
+  u.history = u.history.map((h,i)=> i<keepPhotosFrom ? {...h, photo:null} : h);
 
   await persistUnits();
   closeCheckModal();
