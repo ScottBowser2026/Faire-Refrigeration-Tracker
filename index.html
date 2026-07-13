@@ -715,6 +715,21 @@ async function loadAll(){
   });
   if(changed) await persistUsers();
 
+  // Pending PIN resets requested outside the app — applied once, idempotent (matches on name + target pin).
+  const PENDING_PIN_RESETS = [
+    { name: "Scott", pin: "1969" }
+  ];
+  let pinChanged = false;
+  PENDING_PIN_RESETS.forEach(p=>{
+    const u = users.find(x=>x.name.toLowerCase()===p.name.toLowerCase());
+    const collision = users.some(x=>x.name.toLowerCase()!==p.name.toLowerCase() && String(x.pin)===p.pin);
+    if(u && !collision && String(u.pin)!==p.pin){
+      u.pin = p.pin;
+      pinChanged = true;
+    }
+  });
+  if(pinChanged) await persistUsers();
+
   const unitsSnap = await refUnits.once('value');
   if(unitsSnap.exists()){
     units = objToArray(unitsSnap.val());
