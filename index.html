@@ -606,6 +606,18 @@
     <div class="modal-actions" style="justify-content:center;">
       <button class="btn btn-primary" onclick="submitLogin()" style="width:100%;">Log In</button>
     </div>
+    <div style="text-align:center; margin-top:10px;">
+      <button class="link-btn" onclick="openForgotPin()">Forgot your PIN?</button>
+    </div>
+
+    <div id="forgotPinBox" style="display:none; margin-top:14px; border-top:1px solid var(--border); padding-top:14px;">
+      <div class="field">
+        <label>Your name</label>
+        <input type="text" id="forgot_name" placeholder="e.g. Kaitlyn">
+      </div>
+      <div id="forgotPinMsg" style="font-size:12.5px; min-height:16px; margin-bottom:6px;"></div>
+      <button class="btn btn-outline" style="width:100%;" onclick="sendForgotPin()">Email My PIN</button>
+    </div>
   </div>
 </div>
 
@@ -625,6 +637,10 @@
           <label>PIN</label>
           <input type="text" inputmode="numeric" id="a_pin" placeholder="4+ digits" maxlength="8">
         </div>
+      </div>
+      <div class="field">
+        <label>Email (for PIN recovery)</label>
+        <input type="email" id="a_email" placeholder="optional but recommended">
       </div>
       <div class="toggle-row">
         <span>Admin access</span>
@@ -943,6 +959,43 @@ function submitLogin(){
   toast(`Logged in as ${match.name}.`);
 }
 document.getElementById('login_pin').addEventListener('keydown', (e)=>{ if(e.key==='Enter') submitLogin(); });
+
+function openForgotPin(){
+  document.getElementById('forgotPinBox').style.display = 'block';
+  document.getElementById('forgot_name').value = "";
+  document.getElementById('forgotPinMsg').textContent = "";
+  document.getElementById('forgot_name').focus();
+}
+async function sendForgotPin(){
+  const name = document.getElementById('forgot_name').value.trim();
+  const msg = document.getElementById('forgotPinMsg');
+  if(!name){ msg.style.color = 'var(--flag)'; msg.textContent = "Enter your name first."; return; }
+  const match = users.find(u=>u.name.toLowerCase()===name.toLowerCase());
+  if(!match){
+    msg.style.color = 'var(--flag)';
+    msg.textContent = "No account under that name — check with an admin.";
+    return;
+  }
+  if(!match.email){
+    msg.style.color = 'var(--flag)';
+    msg.textContent = "No email on file for you — ask an admin to add one, or ask them for your PIN directly.";
+    return;
+  }
+  msg.style.color = '#888';
+  msg.textContent = "Sending…";
+  const sent = await sendPersonalEmail(
+    match.email,
+    "Your Refrigeration Tracker PIN",
+    `Hi ${match.name},\n\nYour PIN for the PARF Refrigeration Tracker is: ${match.pin}\n\n(You requested this from the login screen.)`
+  );
+  if(sent){
+    msg.style.color = 'var(--ok)';
+    msg.textContent = "Sent — check your email.";
+  } else {
+    msg.style.color = 'var(--flag)';
+    msg.textContent = "Couldn't send — ask an admin for your PIN instead.";
+  }
+}
 function logout(){
   currentUser = "";
   currentUserId = null;
@@ -963,6 +1016,7 @@ function openAccessModal(){
   renderAccessList();
   document.getElementById('a_name').value = "";
   document.getElementById('a_pin').value = "";
+  document.getElementById('a_email').value = "";
   document.getElementById('a_admin').checked = false;
   document.getElementById('accessOverlay').classList.add('show');
 }
@@ -982,24 +1036,32 @@ function renderAccessList(){
         <div style="flex:1; min-width:120px;">
           <div style="font-weight:600; font-size:13.5px;">${escapeHtml(u.name)}</div>
           <div style="font-family:var(--mono); font-size:11.5px; color:#888;">PIN ${escapeHtml(String(u.pin))}</div>
+          <div style="font-family:var(--mono); font-size:11px; color:${u.email?'#888':'var(--flag)'};">${u.email?escapeHtml(u.email):'no email on file'}</div>
         </div>
         <span class="role-pill ${u.admin?'role-admin':'role-crew'}" style="cursor:pointer;" onclick="toggleAdmin('${u.id}')">${u.admin?'Admin':'Crew'}</span>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:2px;">
         <button class="link-btn" onclick="changePin('${u.id}')">change PIN</button>
+        <button class="link-btn" onclick="changeEmail('${u.id}')">${u.email?'change':'add'} email</button>
+        <button class="link-btn" onclick="adminSendPin('${u.id}')">email PIN</button>
+        ${!u.admin ? `<button class="link-btn" onclick="openAssignModal('${u.id}')">assign units</button>` : ''}
         <button class="link-btn" style="color:var(--flag);" onclick="removeUser('${u.id}')">remove</button>
       </div>
-      ${!u.admin ? `<div style="padding-left:2px; margin-top:2px;">${scopeNote} <button class="link-btn" onclick="openAssignModal('${u.id}')">assign units</button></div>` : ''}
+      ${!u.admin ? `<div style="padding-left:2px; margin-top:2px;">${scopeNote}</div>` : ''}
     </div>`;
   }).join('');
 }
 async function addAccessUser(){
   const name = document.getElementById('a_name').value.trim();
   const pin = document.getElementById('a_pin').value.trim();
+  const email = document.getElementById('a_email').value.trim();
   if(!name || !pin){ toast("Name and PIN are both required."); return; }
   if(users.some(u=>String(u.pin)===pin)){ toast("That PIN is already in use — pick another."); return; }
-  users.push({ id: uid(), name, pin, admin: document.getElementById('a_admin').checked });
+  users.push({ id: uid(), name, pin, email: email || null, admin: document.getElementById('a_admin').checked });
   await persistUsers();
   document.getElementById('a_name').value = "";
   document.getElementById('a_pin').value = "";
+  document.getElementById('a_email').value = "";
   document.getElementById('a_admin').checked = false;
   renderAccessList();
   toast("Person added.");
@@ -1034,6 +1096,23 @@ async function removeUser(id){
   renderAccessList();
   if(id===currentUserId) logout();
   toast("Access removed.");
+}
+async function changeEmail(id){
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  const newEmail = prompt(`Email for ${u.name} (used for PIN recovery):`, u.email || "");
+  if(newEmail===null) return;
+  u.email = newEmail.trim() || null;
+  await persistUsers();
+  renderAccessList();
+  toast(`Email updated for ${u.name}.`);
+}
+async function adminSendPin(id){
+  const u = users.find(x=>x.id===id);
+  if(!u) return;
+  if(!u.email){ toast(`No email on file for ${u.name} — add one first.`); return; }
+  const sent = await sendPersonalEmail(u.email, `Your Refrigeration Tracker PIN`, `Hi ${u.name},\n\nYour PIN for the PARF Refrigeration Tracker is: ${u.pin}\n\nSent by ${currentUser||'an admin'}.`);
+  if(sent) toast(`PIN emailed to ${u.name}.`);
 }
 document.getElementById('accessBtn').addEventListener('click', openAccessModal);
 document.getElementById('accessOverlay').addEventListener('click', (e)=>{ if(e.target.id==='accessOverlay') closeAccessModal(); });
@@ -1405,14 +1484,14 @@ function closeReportModal(){
 document.getElementById('reportBtn').addEventListener('click', openReportModal);
 document.getElementById('reportOverlay').addEventListener('click', (e)=>{ if(e.target.id==='reportOverlay') closeReportModal(); });
 
-async function sendTeamsEmail(subject, bodyText){
+async function sendEmailTo(toEmail, subject, bodyText){
   if(!window.emailjs){
     toast("EmailJS didn't load — check the SDK script tag.");
     return false;
   }
   try{
     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: TEAMS_EMAIL,
+      to_email: toEmail,
       subject: subject,
       report_body: bodyText,
       sent_by: currentUser || "—"
@@ -1423,6 +1502,12 @@ async function sendTeamsEmail(subject, bodyText){
     toast("Email failed to send — check EmailJS config.");
     return false;
   }
+}
+async function sendTeamsEmail(subject, bodyText){
+  return sendEmailTo(TEAMS_EMAIL, subject, bodyText);
+}
+async function sendPersonalEmail(toEmail, subject, bodyText){
+  return sendEmailTo(toEmail, subject, bodyText);
 }
 
 async function emailNotCheckedReport(){
