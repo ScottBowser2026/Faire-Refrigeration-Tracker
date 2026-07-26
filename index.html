@@ -107,6 +107,10 @@
 
   .alert-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:13.5px; }
   .checklist-row{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .ticket-card{ background:var(--card); border:1px solid var(--border); border-radius:8px; max-width:460px; margin:0 auto; padding:22px 22px 20px; position:relative; box-shadow:0 4px 16px rgba(30,38,32,.1); }
+  .ticket-accent{ position:absolute; top:0; left:0; right:0; height:5px; background:repeating-linear-gradient(90deg, var(--frost-deep) 0 10px, transparent 10px 20px); border-radius:8px 8px 0 0; }
+  .ticket-title{ text-align:center; margin:8px 0 2px; font-size:17px; letter-spacing:.02em; }
+  .ticket-sub{ text-align:center; font-size:12.5px; color:#888; margin-bottom:18px; }
   .checklist-row:last-child{ border-bottom:none; }
   .checklist-row .name{ font-weight:600; font-size:13.5px; }
   .checklist-row .loc{ font-family:var(--mono); font-size:11px; color:#888; margin-left:6px; }
@@ -256,10 +260,41 @@
     <div id="maintenanceWorkerList"></div>
   </div>
 
-  <!-- USER CHECKLIST VIEW (User/crew role only — replaces the dashboard above) -->
+  <!-- USER CHECK FORM (User/crew role only — replaces the dashboard above) -->
   <div id="userWorkerView" style="display:none">
-    <div class="section-head"><h2>My Units to Check</h2><span class="hint">Assigned to you · resets each day as you log checks</span></div>
-    <div id="userWorkerList" style="max-height:70vh; overflow-y:auto;"></div>
+    <div class="ticket-card">
+      <div class="ticket-accent"></div>
+      <h3 class="ticket-title">Refrigeration Check</h3>
+      <div class="ticket-sub">Time &amp; temperature verification</div>
+
+      <div class="field"><label>Booth</label><select id="uc_booth"></select></div>
+      <div class="field"><label>Equipment</label><select id="uc_equipment" disabled><option value="">Select booth first…</option></select></div>
+      <div class="field"><label>Entry type</label>
+        <select id="uc_type">
+          <option value="check">Routine check</option>
+          <option value="maintenance">Maintenance</option>
+          <option value="repair">Repair</option>
+          <option value="cleaning">Cleaning</option>
+          <option value="off">Unit is off</option>
+        </select>
+      </div>
+      <div id="uc_tempFieldsWrap">
+        <div class="two-col">
+          <div class="field"><label>Temperature (°F)</label><input type="text" id="uc_temp" inputmode="decimal"></div>
+          <div class="field"><label>Fans operating?</label><select id="uc_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
+        </div>
+      </div>
+      <div id="uc_performedByWrap" style="display:none;">
+        <div class="field"><label>Performed by</label><select id="uc_performedby"><option value="Staff">Staff</option><option value="Outside Service Co">Outside Service Co</option></select></div>
+      </div>
+      <div class="field"><label>Check time</label><input type="datetime-local" id="uc_time"></div>
+      <div class="field"><label>Checked by</label><input type="text" id="uc_checkedby" readonly style="background:var(--unset-bg);"></div>
+      <div class="field"><label>Photo (optional)</label><input type="file" id="uc_photo" accept="image/*"></div>
+      <div class="field"><label>Notes (optional)</label><textarea id="uc_notes" rows="2" placeholder="Anything worth flagging…"></textarea></div>
+
+      <button class="btn btn-primary" style="width:100%; padding:12px;" onclick="submitUserCheck()">Submit Check</button>
+      <div id="uc_msg" style="font-size:12.5px; margin-top:8px; text-align:center;"></div>
+    </div>
   </div>
 
   <!-- MAINTENANCE TICKETS OVERVIEW (F&B Manager / Superadmin only) -->
@@ -928,7 +963,7 @@ function renderRoleControls(){
       document.getElementById('normalDashboardWrap').style.display = (isMaintenanceWorker()||isUserRole()) ? 'none' : 'block';
       document.getElementById('maintenanceTicketsOverviewWrap').style.display = 'none';
       document.getElementById('accessPanelWrap').style.display = 'none';
-      if(isUserRole()) renderUserWorkerList();
+      if(isUserRole()){ setUcDefaults(); renderUserWorkerList(); }
     }
   } else {
     whoBox.innerHTML = `<button class="btn who-btn btn-small" id="loginBtn">Log In</button>`;
@@ -1264,50 +1299,95 @@ function renderMaintenanceWorkerList(){
     </div>`).join('');
 }
 
-let openUserGroups = new Set();
-function toggleUserGroup(key){
-  if(openUserGroups.has(key)) openUserGroups.delete(key); else openUserGroups.add(key);
-  renderUserWorkerList();
+function myPendingUnits(){
+  return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isCheckedToday(u) && !isMarkedOffToday(u));
 }
+function unitGroupKey(u){ return (u.booth||'').trim() || (u.location||'').trim() || 'Ungrouped'; }
 function renderUserWorkerList(){
-  const wrap = document.getElementById('userWorkerList'); if(!wrap) return;
   if(!isUserRole()) return;
-  const myUnits = units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isCheckedToday(u) && !isMarkedOffToday(u));
-  if(myUnits.length===0){
-    wrap.innerHTML = `<div style="color:#888; font-size:13.5px;">${units.some(u=>(u.assignedUserIds||[]).includes(currentUserId)) ? "All your assigned units are checked for today — nice work!" : "No units are assigned to you yet — ask your F&B Manager."}</div>`;
+  const pending = myPendingUnits();
+  const boothSel = document.getElementById('uc_booth');
+  if(pending.length===0){
+    boothSel.innerHTML = `<option value="">${units.some(u=>(u.assignedUserIds||[]).includes(currentUserId)) ? "All caught up for today!" : "No booths assigned to you yet"}</option>`;
+    boothSel.disabled = true;
+    document.getElementById('uc_equipment').innerHTML = `<option value="">—</option>`;
+    document.getElementById('uc_equipment').disabled = true;
     return;
   }
-  const groups = {};
-  myUnits.forEach(u=>{
-    const key = (u.booth||'').trim() || (u.location||'').trim() || 'Ungrouped';
-    if(!groups[key]) groups[key] = [];
-    groups[key].push(u);
-  });
-  const groupKeys = Object.keys(groups).sort((a,b)=>a.localeCompare(b));
-  wrap.innerHTML = groupKeys.map(key=>{
-    const list = groups[key].slice().sort((a,b)=>a.name.localeCompare(b.name));
-    const isOpen = openUserGroups.has(key);
-    const rows = list.map(u=>{
-      const comp = complianceStats(u);
-      const streakText = comp.streakGood===null ? 'no history yet' : `${comp.streakDays} day${comp.streakDays===1?'':'s'} ${comp.streakGood?'in':'out of'} compliance`;
-      const readingText = u.currentTemp!=null ? `${u.currentTemp}°F · fans ${u.fansOperating?'ok':'DOWN'}` : 'never checked';
-      const locText = (u.location && u.location.trim() && u.location.trim()!==key) ? ` · ${escapeHtml(u.location.trim())}` : '';
-      return `<div class="checklist-row">
-        <div>
-          <span class="name">${escapeHtml(u.name)}</span><span class="loc">${locText}</span>
-          <div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:2px;">${readingText} · ${streakText}</div>
-        </div>
-        <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log Check</button>
-      </div>`;
-    }).join('');
-    return `<div class="panel" style="margin-bottom:8px; padding:0; overflow:hidden;">
-      <button onclick="toggleUserGroup('${key.replace(/'/g,"\\'")}')" style="width:100%; text-align:left; background:var(--paper); border:none; padding:10px 14px; font-weight:700; font-size:13.5px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
-        <span>${escapeHtml(key)} <span style="color:#888; font-weight:400; font-size:12px;">(${list.length})</span></span>
-        <span style="color:#888;">${isOpen?'▾':'▸'}</span>
-      </button>
-      ${isOpen ? `<div style="padding:0 14px;">${rows}</div>` : ''}
-    </div>`;
-  }).join('');
+  boothSel.disabled = false;
+  const booths = [...new Set(pending.map(unitGroupKey))].sort();
+  const currentBooth = booths.includes(boothSel.value) ? boothSel.value : booths[0];
+  boothSel.innerHTML = booths.map(b=>`<option value="${escapeHtml(b)}" ${b===currentBooth?'selected':''}>${escapeHtml(b)}</option>`).join('');
+  populateUserEquipmentSelect();
+}
+function populateUserEquipmentSelect(){
+  const boothSel = document.getElementById('uc_booth');
+  const equipSel = document.getElementById('uc_equipment');
+  const booth = boothSel.value;
+  const pending = myPendingUnits().filter(u=>unitGroupKey(u)===booth);
+  if(pending.length===0){ equipSel.innerHTML = `<option value="">—</option>`; equipSel.disabled = true; return; }
+  equipSel.disabled = false;
+  const current = pending.some(u=>u.id===equipSel.value) ? equipSel.value : pending[0].id;
+  equipSel.innerHTML = pending.map(u=>`<option value="${u.id}" ${u.id===current?'selected':''}>${escapeHtml(u.name)}</option>`).join('');
+}
+document.getElementById('uc_booth').addEventListener('change', populateUserEquipmentSelect);
+function updateUcTypeVisibility(){
+  const type = document.getElementById('uc_type').value;
+  document.getElementById('uc_tempFieldsWrap').style.display = type==='check' ? 'block' : 'none';
+  document.getElementById('uc_performedByWrap').style.display = type==='repair' ? 'block' : 'none';
+}
+document.getElementById('uc_type').addEventListener('change', updateUcTypeVisibility);
+function setUcDefaults(){
+  document.getElementById('uc_checkedby').value = currentUser || '';
+  const now = new Date(); now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  document.getElementById('uc_time').value = now.toISOString().slice(0,16);
+  document.getElementById('uc_type').value = 'check';
+  document.getElementById('uc_temp').value = '';
+  document.getElementById('uc_fans').value = 'true';
+  document.getElementById('uc_performedby').value = 'Staff';
+  document.getElementById('uc_photo').value = '';
+  document.getElementById('uc_notes').value = '';
+  document.getElementById('uc_msg').textContent = '';
+  updateUcTypeVisibility();
+}
+async function submitUserCheck(){
+  const unitId = document.getElementById('uc_equipment').value;
+  const u = units.find(x=>x.id===unitId);
+  const msg = document.getElementById('uc_msg');
+  if(!u){ msg.style.color='var(--flag)'; msg.textContent='Select a booth and piece of equipment first.'; return; }
+  const type = document.getElementById('uc_type').value;
+  const notes = document.getElementById('uc_notes').value.trim();
+  const photoFile = document.getElementById('uc_photo').files[0];
+  let photoDataUrl = null;
+  if(photoFile){
+    if(photoFile.size>900*1024){ msg.style.color='var(--flag)'; msg.textContent='Photo too large — use one under ~900KB.'; return; }
+    photoDataUrl = await fileToDataUrl(photoFile);
+  }
+  if(type==='check'){
+    const temp = parseFloat(document.getElementById('uc_temp').value);
+    if(isNaN(temp)){ msg.style.color='var(--flag)'; msg.textContent='Enter a temperature.'; return; }
+    const fans = document.getElementById('uc_fans').value==='true';
+    u.currentTemp=temp; u.fansOperating=fans; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
+    if(!u.history) u.history=[];
+    u.history.push({ at:u.lastCheckAt, temp, fans, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
+  } else if(type==='off'){
+    if(!confirm(`Confirm: mark "${u.name}" as OFF for today? It won't need a compliance check until tomorrow.`)) return;
+    const offAt = new Date().toISOString();
+    u.markedOffAt = offAt; u.markedOffBy = currentUser;
+    if(!u.history) u.history=[];
+    u.history.push({ at:offAt, temp:null, fans:null, notes: notes||'Marked off for the day', photo:photoDataUrl, by:currentUser, entryType:'off' });
+  } else {
+    if(!notes){ msg.style.color='var(--flag)'; msg.textContent='Add a note describing what was done.'; return; }
+    if(!u.history) u.history=[];
+    const entry = { at:new Date().toISOString(), temp:null, fans:null, notes, photo:photoDataUrl, by:currentUser, entryType:type };
+    if(type==='repair') entry.performedBy = document.getElementById('uc_performedby').value;
+    u.history.push(entry);
+  }
+  await persistUnits();
+  render(); renderFleetChart(); renderIncidents();
+  setUcDefaults();
+  renderUserWorkerList();
+  msg.style.color='var(--ok)'; msg.textContent = `Submitted — ${u.name} cleared from your list.`;
 }
 
 function renderMaintenanceTicketsOverview(){
@@ -1688,7 +1768,7 @@ function renderCsvPreviewList(){
 async function confirmCsvImport(){
   if(!confirm(`Create ${pendingCsvUnits.length} new unit(s) at ${SITES[currentSite].name}? This can't be undone in bulk — you'd delete them one at a time if needed.`)) return;
   pendingCsvUnits.forEach(u=>{
-    units.push({ id:uid(), name:u.name, type:u.type, runtime:'always', booth:u.booth, location:'', stock:'',
+    units.push({ id:uid(), name:u.name, type:u.type, runtime:'always', booth:u.booth, location:u.booth, stock:'',
       tmin:33, tmax:40, assignedUserIds:[], assignedUserNames:[], currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] });
   });
   await persistUnits();
