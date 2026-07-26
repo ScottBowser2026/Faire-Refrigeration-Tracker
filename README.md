@@ -75,6 +75,8 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 - Due/overdue assigned tasks show only on that worker's "Scheduled PM Due" list; unassigned ones show to everyone
 - Marking a task done logs it to the unit's history and resets the countdown
 
+- **"Clear" option** — when opening a failing unit that has no ticket yet, F&B Manager/Superadmin see a "Clear Report" option below the ticket form for cases that don't need a formal ticket (checked in person, resolved on its own, etc.). **Notes are required** to clear — it can't be dismissed silently. Once cleared, the incident shows a "Cleared" status with who cleared it and why, right on the row.
+
 ## Alerts & Incidents — now ticket-aware
 
 - Each incident row shows **Booth first** (bold), equipment name second — matching the "location leads" convention used elsewhere
