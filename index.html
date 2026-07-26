@@ -482,6 +482,11 @@
         <button class="btn btn-outline" onclick="closeTicketModal()">Cancel</button>
         <button class="btn btn-primary" onclick="openMaintenanceTicket()">Open Ticket</button>
       </div>
+      <div id="clearReportSection" style="display:none; border-top:1px solid var(--border); margin-top:16px; padding-top:14px;">
+        <div style="font-size:12.5px; color:#888; margin-bottom:8px;">Or, if this doesn't need a formal ticket (checked in person, resolved on its own, etc.):</div>
+        <div class="field"><label>Notes <span class="hint">(required to clear)</span></label><textarea id="clear_report_notes" rows="2" placeholder="Why this is being cleared…"></textarea></div>
+        <button class="btn btn-outline" style="width:100%; border-color:var(--flag); color:var(--flag);" onclick="clearIncidentReport()">Clear Report</button>
+      </div>
     </div>
 
     <div id="ticketDetailView" style="display:none">
@@ -1213,11 +1218,15 @@ function render(){
 
 // ---- Maintenance Tickets ----
 let ticketModalUnitId = null;
+let pendingClearIncidentAt = null;
+let pendingClearUnitId = null;
 function maintenanceWorkersAtSite(siteKey){
   return (siteUsersCache[siteKey]||[]).filter(u=>u.role==='maintenance');
 }
-function openTicketModal(unitId){
+function openTicketModal(unitId, incidentAt){
   ticketModalUnitId = unitId;
+  pendingClearUnitId = incidentAt ? unitId : null;
+  pendingClearIncidentAt = incidentAt || null;
   const u = units.find(x=>x.id===unitId); if(!u) return;
   document.getElementById('ticketModalTitle').textContent = `Maintenance Ticket — ${u.name}`;
   const assigneeSelect = document.getElementById('ticket_assignee');
@@ -1226,7 +1235,7 @@ function openTicketModal(unitId){
   renderTicketModal();
   document.getElementById('ticketOverlay').classList.add('show');
 }
-function closeTicketModal(){ document.getElementById('ticketOverlay').classList.remove('show'); ticketModalUnitId=null; }
+function closeTicketModal(){ document.getElementById('ticketOverlay').classList.remove('show'); ticketModalUnitId=null; pendingClearIncidentAt=null; pendingClearUnitId=null; }
 function renderTicketModal(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u) return;
   const ticket = u.maintenanceTicket;
@@ -1244,6 +1253,10 @@ function renderTicketModal(){
     document.getElementById('ticketModalSub').textContent = 'No open ticket for this unit yet.';
     openForm.style.display = 'block'; detailView.style.display = 'none'; closeRow.style.display = 'none';
     document.getElementById('ticket_reason').value = '';
+    const clearSection = document.getElementById('clearReportSection');
+    const showClear = pendingClearUnitId===u.id && pendingClearIncidentAt;
+    clearSection.style.display = showClear ? 'block' : 'none';
+    if(showClear) document.getElementById('clear_report_notes').value = '';
     return;
   }
   openForm.style.display = 'none'; detailView.style.display = 'block'; closeRow.style.display = 'flex';
@@ -1288,6 +1301,19 @@ function renderTicketModal(){
     document.getElementById('os_date').value=''; document.getElementById('os_invoice').value=''; document.getElementById('os_description').value=''; document.getElementById('os_photo').value='';
     document.getElementById('ticket_close_notes').value='';
   }
+}
+async function clearIncidentReport(){
+  if(!isSiteAdmin()){ toast('Only an F&B Manager or Superadmin can clear a report.'); return; }
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u) return;
+  const notes = document.getElementById('clear_report_notes').value.trim();
+  if(!notes){ toast('Notes are required to clear a report.'); return; }
+  if(!confirm('Clear this report? It will no longer show as failing in Alerts & Incidents.')) return;
+  if(!u.clearedIncidents) u.clearedIncidents=[];
+  u.clearedIncidents.push({ at: pendingClearIncidentAt, clearedBy: currentUser, clearedAt: new Date().toISOString(), notes });
+  await persistUnits();
+  closeTicketModal();
+  render(); renderIncidents();
+  toast('Report cleared.');
 }
 async function openMaintenanceTicket(){
   if(!isSiteAdmin()){ toast('Only an F&B Manager or Superadmin can open a new ticket.'); return; }
@@ -2298,20 +2324,23 @@ function buildIncidents(){
 function incidentStatusInfo(inc){
   if(inc.resolvedAt) return { label:'Resolved '+fmtDate(inc.resolvedAt), cls:'alert-resolved', hasTicket:false, resolved:true };
   const u = units.find(x=>x.id===inc.unitId);
+  const cleared = u && (u.clearedIncidents||[]).find(c=>c.at===inc.at);
+  if(cleared) return { label:'Cleared', cls:'alert-resolved', hasTicket:false, resolved:true, clearedNotes:cleared.notes, clearedBy:cleared.clearedBy };
   if(u && u.maintenanceTicket) return { label:'Ticket Open', cls:'alert-open', hasTicket:true, resolved:false };
   return { label:'Fail', cls:'alert-open', hasTicket:false, resolved:false };
 }
-function openTicketFromIncident(unitId, reason){
-  openTicketModal(unitId);
+function openTicketFromIncident(unitId, reason, at){
+  openTicketModal(unitId, at);
   const openForm = document.getElementById('ticketOpenForm');
   if(openForm.style.display !== 'none') document.getElementById('ticket_reason').value = reason;
 }
 function incidentRowHtml(inc, compact){
   const status = incidentStatusInfo(inc);
   const canAct = isSiteAdmin() && !status.resolved;
-  const actionBtn = canAct ? `<button class="btn btn-primary btn-small" style="margin-top:4px;" onclick="openTicketFromIncident('${inc.unitId}', '${inc.reason.replace(/'/g,"\\'")}')">${status.hasTicket?'View Ticket':'Open'}</button>` : '';
+  const actionBtn = canAct ? `<button class="btn btn-primary btn-small" style="margin-top:4px;" onclick="openTicketFromIncident('${inc.unitId}', '${inc.reason.replace(/'/g,"\\'")}', '${inc.at}')">${status.hasTicket?'View Ticket':'Open'}</button>` : '';
+  const clearedNotesHtml = status.clearedNotes ? `<div style="font-size:11.5px; color:#888; margin-top:2px;">Cleared by ${escapeHtml(status.clearedBy||'—')}: "${escapeHtml(status.clearedNotes)}"</div>` : '';
   return `<div class="alert-row">
-    <div><b>${escapeHtml(inc.booth)}</b> <span class="meta">— ${escapeHtml(inc.unit)}</span><br><span style="font-size:12.5px;">${escapeHtml(inc.reason.trim())}</span></div>
+    <div><b>${escapeHtml(inc.booth)}</b> <span class="meta">— ${escapeHtml(inc.unit)}</span><br><span style="font-size:12.5px;">${escapeHtml(inc.reason.trim())}</span>${clearedNotesHtml}</div>
     <div style="text-align:right;"><div class="meta">${fmtDate(inc.at)}</div><span class="${status.cls}">${status.label}</span>${actionBtn}</div>
   </div>`;
 }
