@@ -1370,30 +1370,50 @@ function closeIncidentsModal(){ document.getElementById('incidentsOverlay').clas
 document.getElementById('viewAllIncidentsBtn').addEventListener('click', openIncidentsModal);
 
 // ---- Manage Access: Superadmins (superadmin-only) ----
+let editingSuperadminId = null;
 function renderSuperadminList(){
   const wrap = document.getElementById('superadminList'); if(!wrap) return;
   if(!isSuperadmin()){ wrap.innerHTML=''; return; }
   const isLastOne = superadmins.length<=1;
-  wrap.innerHTML = superadmins.map(u=>`
-    <div class="access-row">
-      <input class="name-col" style="flex:1 1 90px;" value="${escapeHtml(u.firstName||'')}" placeholder="First" onchange="updateSuperadminField('${u.id}','firstName',this.value)">
-      <input class="name-col" style="flex:1 1 90px;" value="${escapeHtml(u.lastName||'')}" placeholder="Last" onchange="updateSuperadminField('${u.id}','lastName',this.value)">
-      <input class="email-col" value="${escapeHtml(u.email||'')}" placeholder="email" onchange="updateSuperadminField('${u.id}','email',this.value)">
-      <input class="phone-col" value="${escapeHtml(u.phone||'')}" placeholder="phone" onchange="updateSuperadminField('${u.id}','phone',this.value)">
-      <input class="pin-col" value="${escapeHtml(String(u.pin))}" onchange="updateSuperadminField('${u.id}','pin',this.value)">
-      <button class="btn btn-outline btn-small" onclick="removeSuperadmin('${u.id}')" ${isLastOne?'disabled title="Add another Superadmin before removing this one"':''}>Remove</button>
-    </div>`).join('');
+  wrap.innerHTML = superadmins.map(u=>{
+    if(editingSuperadminId===u.id){
+      return `<div class="access-row">
+        <input class="name-col" style="flex:1 1 90px;" id="edit_sa_first_${u.id}" value="${escapeHtml(u.firstName||'')}" placeholder="First">
+        <input class="name-col" style="flex:1 1 90px;" id="edit_sa_last_${u.id}" value="${escapeHtml(u.lastName||'')}" placeholder="Last">
+        <input class="email-col" id="edit_sa_email_${u.id}" value="${escapeHtml(u.email||'')}" placeholder="email">
+        <input class="phone-col" id="edit_sa_phone_${u.id}" value="${escapeHtml(u.phone||'')}" placeholder="phone">
+        <input class="pin-col" id="edit_sa_pin_${u.id}" value="${escapeHtml(String(u.pin))}">
+        <button class="btn btn-primary btn-small" onclick="saveSuperadminEdit('${u.id}')">Save</button>
+        <button class="btn btn-outline btn-small" onclick="cancelSuperadminEdit()">Cancel</button>
+      </div>`;
+    }
+    return `<div class="access-row">
+      <b style="flex:1 1 140px;">${escapeHtml(fullName(u))}</b>
+      <span style="color:#888; font-size:12px; flex:1 1 150px;">${escapeHtml(u.email||'no email')}</span>
+      <span style="color:#888; font-size:12px; flex:1 1 110px;">${escapeHtml(u.phone||'no phone')}</span>
+      <span class="mono" style="font-size:12.5px;">PIN ${escapeHtml(String(u.pin))}</span>
+      <button class="btn btn-outline btn-small" onclick="editSuperadmin('${u.id}')">Edit</button>
+      <button class="btn btn-outline btn-small" onclick="removeSuperadmin('${u.id}')" ${isLastOne?'disabled title="Add another Superadmin before removing this one"':''}>Delete</button>
+    </div>`;
+  }).join('');
 }
-async function updateSuperadminField(id, field, value){
+function editSuperadmin(id){ editingSuperadminId = id; renderSuperadminList(); }
+function cancelSuperadminEdit(){ editingSuperadminId = null; renderSuperadminList(); }
+async function saveSuperadminEdit(id){
   const u = superadmins.find(x=>x.id===id); if(!u) return;
-  u[field] = value.trim();
-  await persistSuperadmins(); toast('Saved.');
+  u.firstName = document.getElementById(`edit_sa_first_${id}`).value.trim();
+  u.lastName = document.getElementById(`edit_sa_last_${id}`).value.trim();
+  u.email = document.getElementById(`edit_sa_email_${id}`).value.trim() || null;
+  u.phone = document.getElementById(`edit_sa_phone_${id}`).value.trim() || null;
+  u.pin = document.getElementById(`edit_sa_pin_${id}`).value.trim();
+  editingSuperadminId = null;
+  await persistSuperadmins(); renderSuperadminList(); toast('Saved.');
 }
 async function removeSuperadmin(id){
   if(superadmins.length<=1){ toast("Can't remove the last Superadmin — add another one first."); return; }
-  if(!confirm("Remove this Superadmin's access?")) return;
+  if(!confirm("Delete this Superadmin's access?")) return;
   superadmins = superadmins.filter(u=>u.id!==id);
-  await persistSuperadmins(); toast('Removed.');
+  await persistSuperadmins(); toast('Deleted.');
 }
 document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>{
   const firstName = document.getElementById('newSAFirst').value.trim();
@@ -1406,7 +1426,7 @@ document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>
   superadmins.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
   await persistSuperadmins();
   document.getElementById('newSAFirst').value=''; document.getElementById('newSALast').value=''; document.getElementById('newSAEmail').value=''; document.getElementById('newSAPhone').value=''; document.getElementById('newSAPin').value='';
-  toast(`Added ${name} as Superadmin.`);
+  toast(`Added ${firstName} as Superadmin.`);
 });
 
 // ---- Manage Access: Site Users (Admin/Crew, this site only) ----
@@ -1442,25 +1462,51 @@ async function jumpToSite(siteKey){
   renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList();
   toast(`Switched to ${SITES[currentSite].name}.`);
 }
+let editingSiteUserId = null;
 function renderAccessList(){
   const wrap = document.getElementById('accessList'); if(!wrap) return;
   const list = siteUsersCache[currentSite] || [];
-  wrap.innerHTML = list.map(u=>`
-    <div class="access-row">
+  wrap.innerHTML = list.map(u=>{
+    if(editingSiteUserId===u.id){
+      return `<div class="access-row">
+        <select id="edit_su_role_${u.id}" style="flex-shrink:0;">
+          <option value="crew" ${u.role==='crew'?'selected':''}>User</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}>F&amp;B Manager</option>
+          <option value="maintenance" ${u.role==='maintenance'?'selected':''}>Maintenance</option>
+        </select>
+        <input class="name-col" style="flex:1 1 80px;" id="edit_su_first_${u.id}" value="${escapeHtml(u.firstName||'')}" placeholder="First">
+        <input class="name-col" style="flex:1 1 80px;" id="edit_su_last_${u.id}" value="${escapeHtml(u.lastName||'')}" placeholder="Last">
+        <input class="email-col" id="edit_su_email_${u.id}" value="${escapeHtml(u.email||'')}" placeholder="email">
+        <input class="phone-col" id="edit_su_phone_${u.id}" value="${escapeHtml(u.phone||'')}" placeholder="phone">
+        <input class="pin-col" id="edit_su_pin_${u.id}" value="${escapeHtml(String(u.pin))}">
+        <button class="btn btn-primary btn-small" onclick="saveSiteUserEdit('${u.id}')">Save</button>
+        <button class="btn btn-outline btn-small" onclick="cancelSiteUserEdit()">Cancel</button>
+      </div>`;
+    }
+    return `<div class="access-row">
       <span class="role-pill ${roleClass(u.role)}" style="flex-shrink:0;">${roleLabel(u.role)}</span>
-      <input class="name-col" style="flex:1 1 80px;" value="${escapeHtml(u.firstName||'')}" placeholder="First" onchange="updateSiteUserField('${u.id}','firstName',this.value)">
-      <input class="name-col" style="flex:1 1 80px;" value="${escapeHtml(u.lastName||'')}" placeholder="Last" onchange="updateSiteUserField('${u.id}','lastName',this.value)">
-      <input class="email-col" value="${escapeHtml(u.email||'')}" placeholder="email" onchange="updateSiteUserField('${u.id}','email',this.value)">
-      <input class="phone-col" value="${escapeHtml(u.phone||'')}" placeholder="phone" onchange="updateSiteUserField('${u.id}','phone',this.value)">
-      <input class="pin-col" value="${escapeHtml(String(u.pin))}" onchange="updateSiteUserField('${u.id}','pin',this.value)">
-      <button class="btn btn-outline btn-small" onclick="removeSiteUser('${u.id}')">Remove</button>
-    </div>`).join('');
+      <b style="flex:1 1 120px;">${escapeHtml(fullName(u))}</b>
+      <span style="color:#888; font-size:12px; flex:1 1 140px;">${escapeHtml(u.email||'no email')}</span>
+      <span style="color:#888; font-size:12px; flex:1 1 100px;">${escapeHtml(u.phone||'no phone')}</span>
+      <span class="mono" style="font-size:12.5px;">PIN ${escapeHtml(String(u.pin))}</span>
+      <button class="btn btn-outline btn-small" onclick="editSiteUser('${u.id}')">Edit</button>
+      <button class="btn btn-outline btn-small" onclick="removeSiteUser('${u.id}')">Delete</button>
+    </div>`;
+  }).join('');
 }
-async function updateSiteUserField(id, field, value){
+function editSiteUser(id){ editingSiteUserId = id; renderAccessList(); }
+function cancelSiteUserEdit(){ editingSiteUserId = null; renderAccessList(); }
+async function saveSiteUserEdit(id){
   const list = siteUsersCache[currentSite] || [];
   const u = list.find(x=>x.id===id); if(!u) return;
-  u[field] = value.trim();
-  await persistSiteUsers(); toast('Saved.');
+  u.role = document.getElementById(`edit_su_role_${id}`).value;
+  u.firstName = document.getElementById(`edit_su_first_${id}`).value.trim();
+  u.lastName = document.getElementById(`edit_su_last_${id}`).value.trim();
+  u.email = document.getElementById(`edit_su_email_${id}`).value.trim() || null;
+  u.phone = document.getElementById(`edit_su_phone_${id}`).value.trim() || null;
+  u.pin = document.getElementById(`edit_su_pin_${id}`).value.trim();
+  editingSiteUserId = null;
+  await persistSiteUsers(); renderAccessList(); toast('Saved.');
 }
 document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
   const firstName = document.getElementById('newPersonFirst').value.trim();
@@ -1479,9 +1525,9 @@ document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
   toast(`Added ${firstName}.`);
 });
 async function removeSiteUser(id){
-  if(!confirm("Remove this person's access?")) return;
+  if(!confirm("Delete this person's access?")) return;
   siteUsersCache[currentSite] = (siteUsersCache[currentSite]||[]).filter(u=>u.id!==id);
-  await persistSiteUsers(); toast('Removed.');
+  await persistSiteUsers(); toast('Deleted.');
 }
 
 // ---- Manage Access: Notify List ----
