@@ -67,6 +67,7 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 
 ## Compliance tracking
 
+- Tracks three things per check: **temperature**, **fans**, and **compressor** — a compressor-down reading counts as out-of-compliance the same way fans-down does, across the card, reports, and the compliance streak
 - Each unit's card shows "X days in compliance" or "X days out of compliance," computed from logged routine checks
 - A 14-day fleet compliance chart and an auto-generated Alerts & Incidents feed sit at the top of the Dashboard
 - History modal splits into two tabs per unit: **Routine Checks** vs. **Maintenance & Repairs**
@@ -86,13 +87,60 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 - `index.html` — the entire app (single file)
 - `CNAME` — points this repo at refrigeration.lancelotbiz.com (do not delete)
 
+## Site Users: CSV export, CSV import, and bulk-delete
+
+In the Site Users panel:
+- **Download CSV** — exports the current site's Site Users (name, email, phone, role, PIN) as a file, useful as a backup before making bulk changes
+- **Import from CSV** — same paste-or-upload pattern as equipment import. Columns: `FirstName,LastName,Email,Phone,Role,PIN` (Role should read "User", "F&B Manager", or "Maintenance"; leave PIN blank to auto-generate one)
+- **Delete All Site Users** (Superadmin only) — wipes every F&B Manager/User/Maintenance account at the current site in one action, with two confirmation prompts since it can't be undone. **Superadmins and Lancelot Management accounts are never touched by this** — it only ever affects site-scoped people.
+
+In the Unit Assignments panel:
+- **Delete All Units** (Superadmin only) — wipes every unit at the current site, along with all their history, maintenance tickets, and PM tasks, behind two confirmation prompts. Use this to get a clean slate before re-importing corrected equipment data via CSV.
+
+## CSV Import (bulk-create units)
+
+F&B Manager/Superadmin see an **"Import from CSV"** button next to Add Unit. Paste CSV content or upload a file with this column layout:
+
+```
+location,Equipment,Equipment,Equipment,...
+Absinthe Bar,Walk in Cooler,,,
+Mansion,Upright Refrigerator #1,Upright Refrigerator #2,,
+```
+
+- Any number of Equipment columns is fine — blank cells are skipped
+- One unit gets created per non-blank equipment cell; the Location column becomes that unit's **Booth**
+- Equipment type is auto-detected from the text (walk-in cooler/freezer, upright refrigerator/freezer, chest freezer, bain marie, glycol chiller — anything else defaults to "Other"), shown in an editable preview before anything is created
+- New units default to 33–40°F target range and "Always on" — adjust individually afterward if needed
+
 ## Unit assignment & the User checklist
 
-- **Unit Assignments panel** (Admin Panel tab) — every unit at the site in one list, each with its own dropdown to assign/reassign a User. Unassigned units float to the top and are flagged in red, so gaps are easy to spot at a glance.
-- Assignment can also be set from an individual unit's Edit form, if preferred
-- Users no longer see the full unit grid — logging in shows **"My Units to Check"**, a scrolling list of only their assigned units that haven't been checked yet today
-- As soon as a User logs a routine check, that unit disappears from their list — it resets automatically the next calendar day
-- F&B Manager/Superadmin still see every unit in the normal grid, with an "Assigned to: [name]" line on each card
+- **Add/remove people directly on the card** — F&B Manager and Superadmin see each unit's assigned people as small removable chips right on the Dashboard card, with a "+ Add person…" dropdown underneath. No need to open Edit or the Admin Panel for quick changes.
+- **Multiple Users can be assigned to the same unit** — same options available in the Unit Assignments panel and the unit's Edit form too (multi-select, Ctrl/Cmd+click or tap multiple on mobile)
+- **First one to log a check clears it for everyone** — since "checked today" is tracked per-unit, not per-person, as soon as any assigned User logs a check, that unit disappears from every other assigned User's list too, not just theirs
+- **Unit Assignments panel** (Admin Panel tab) — every unit at the site listed with the same chip style as the Dashboard cards: assigned people shown as removable chips (click × to remove), with a "+ Add person…" dropdown underneath. Unassigned units float to the top and are flagged in red.
+- Users no longer see the full unit grid or a scrollable list — logging in shows the cascading Booth→Equipment check form described above under "User check-logging form"
+- **Booth field** — each unit now has a separate Booth field (in addition to Location) specifically for grouping equipment that belongs to the same booth. Typing suggests existing booth names as you type (autocomplete), so reusing the exact same name is easy instead of risking a typo creating a duplicate group. Existing units will need this filled in via Edit before they group meaningfully — until then they fall back to grouping by Location, then "Ungrouped."
+- **Equipment types expanded** — the Type dropdown now matches real categories: Walk-in Cooler, Walk-in Freezer, Upright Refrigerator, Upright Freezer, Chest Freezer, Bain Marie, Glycol Chiller, or Other (previously just Cooler/Freezer/Bain Marie). Existing units keep their old type value until edited — worth a pass through Edit on each one alongside setting its Booth.
+
+## User check-logging form
+
+Logging in as a User now shows a single polished check form (matching Faire QC Tracker's visual style), not a scrollable list:
+
+- **Booth** dropdown — only booths with equipment still assigned to you and not yet handled today
+- **Equipment** dropdown — cascades from the selected Booth, showing only that booth's pending equipment
+- **Entry type** — Routine check (shows Temp/Fans fields), Maintenance, Repair (shows Performed By), Cleaning, or Unit is off (with confirmation)
+- **Check time** — defaults to now, editable
+- **Checked by** — auto-filled, read-only
+- **Photo** — optional
+- **Notes** — optional
+
+Submitting clears that equipment from the dropdowns immediately and resets the form for the next entry — no navigating back and forth. F&B Manager and Superadmin are unaffected; they still use the full Dashboard grid with the original "Log entry" modal on each card.
+
+## "Unit is off" option
+
+- When logging an entry, Users (and anyone else) can select **"Unit is off"** instead of a routine check — shows a confirmation prompt ("Confirm: mark [unit] as OFF for today?") before saving
+- An off unit shows a distinct "OFF" badge on its card, disappears from the User's daily checklist (same as a completed check), and is excluded from both compliance percentages and not-checked reports for that day — it's treated as neutral, not as a failure
+- Resets automatically the next calendar day, same pattern as checks and PM tasks
 
 ## Daily Report + deep-linking (frontend ready, texting backend pending)
 
@@ -106,3 +154,4 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 - Faire QC Tracker: https://foodqc.lancelotbiz.com/
 - Faire Punch List: https://punchlist.lancelotbiz.com/
 - Shared legal pages (for trackers with SMS programs): https://legal.lancelotbiz.com/
+
