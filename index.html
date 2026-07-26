@@ -2299,7 +2299,7 @@ function incidentStatusInfo(inc){
   if(inc.resolvedAt) return { label:'Resolved '+fmtDate(inc.resolvedAt), cls:'alert-resolved', hasTicket:false, resolved:true };
   const u = units.find(x=>x.id===inc.unitId);
   if(u && u.maintenanceTicket) return { label:'Ticket Open', cls:'alert-open', hasTicket:true, resolved:false };
-  return { label:'Open', cls:'alert-open', hasTicket:false, resolved:false };
+  return { label:'Fail', cls:'alert-open', hasTicket:false, resolved:false };
 }
 function openTicketFromIncident(unitId, reason){
   openTicketModal(unitId);
