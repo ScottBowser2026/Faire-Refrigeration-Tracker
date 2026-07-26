@@ -58,6 +58,7 @@
   .role-admin{background:var(--frost); color:#0d2a2b;}
   .role-crew{background:#5b675f; color:var(--paper);}
   .role-maint{background:var(--maint); color:#fff;}
+  .role-lancelot{background:#3a3a5c; color:#fff;}
 
   .site-switcher{ display:flex; align-items:center; gap:6px; }
   .site-switcher select{ font-weight:600; }
@@ -180,6 +181,7 @@
   <div id="dashboardAdminNav" style="display:none; gap:8px; margin-bottom:20px;">
     <button class="btn btn-outline" id="navDashboardBtn" onclick="switchMainView('dashboard')">Dashboard</button>
     <button class="btn btn-outline" id="navAdminBtn" onclick="switchMainView('admin')">Admin Panel</button>
+    <button class="btn btn-outline" id="navAllFairesBtn" style="display:none" onclick="switchMainView('allfaires')">All Faires</button>
   </div>
 
   <div id="normalDashboardWrap">
@@ -249,9 +251,17 @@
       </div>
     </div>
 
-    <div class="panel" id="allSitesOverviewPanel" style="display:none">
-      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">All Sites — Who's Where <span class="hint">(Superadmin overview, read-only)</span></div>
-      <div id="allSitesOverviewList"></div>
+    <div class="panel" id="lancelotMgmtPanel" style="display:none">
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Lancelot Management <span class="hint">(read-only cross-site snapshot access — no editing rights)</span></div>
+      <div id="lancelotMgmtList"></div>
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <input type="text" id="newLMFirst" placeholder="First name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newLMLast" placeholder="Last name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newLMEmail" placeholder="Email" style="flex:1; min-width:150px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newLMPhone" placeholder="Phone" style="flex:1; min-width:130px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newLMPin" placeholder="PIN" style="width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <button class="btn btn-primary btn-small" id="addLancelotMgmtBtn">Add</button>
+      </div>
     </div>
 
     <div class="panel">
@@ -282,6 +292,18 @@
         <button class="btn btn-primary btn-small" id="addRecipientBtn">Add</button>
       </div>
     </div>
+  </div>
+
+  <!-- ALL FAIRES (Superadmin only — separate top-level view) -->
+  <div id="allFairesView" style="display:none">
+    <div class="section-head"><h2>All Faires</h2><span class="hint">Everyone, across all 4 sites</span></div>
+    <div class="panel" id="allSitesOverviewList"></div>
+  </div>
+
+  <!-- LANCELOT MANAGEMENT SUMMARY (read-only, cross-site — replaces everything else for this role) -->
+  <div id="lancelotSummaryView" style="display:none">
+    <div class="section-head"><h2>Lancelot Entertainment — Snapshot</h2><span class="hint">Read-only summary across all 4 sites</span></div>
+    <div class="grid" id="lancelotSummaryGrid"></div>
   </div>
 
 </main>
@@ -524,6 +546,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const refSuperadmins = db.ref('refrigeration/superadmins');
+const refLancelotMgmt = db.ref('refrigeration/lancelotManagement');
 
 // ===================== EMAILJS CONFIG (same as before) =====================
 const EMAILJS_PUBLIC_KEY = "sB7w0MyBj_u6ayu_0";
@@ -532,6 +555,8 @@ const EMAILJS_TEMPLATE_ID = "template_o7hjtda";
 if (window.emailjs) emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
 
 let superadmins = [];
+let lancelotMgmt = [];
+let siteUnitsCache = {}; // siteKey -> array of units, kept live-synced across ALL sites for the Lancelot Management summary
 let siteUsersCache = {};      // siteKey -> array of {id,name,email,phone,pin,role:'admin'|'crew'}
 let units = [];
 let recipients = [];
@@ -563,8 +588,9 @@ function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg
 function isSuperadmin(){ return currentRole==='superadmin'; }
 function isSiteAdmin(){ return currentRole==='admin' || currentRole==='superadmin'; }
 function isMaintenanceWorker(){ return currentRole==='maintenance'; }
-function roleLabel(role){ return role==='admin' ? 'F&B Manager' : role==='maintenance' ? 'Maintenance' : 'User'; }
-function roleClass(role){ return role==='admin' ? 'role-admin' : role==='maintenance' ? 'role-maint' : 'role-crew'; }
+function isLancelotMgmt(){ return currentRole==='lancelot'; }
+function roleLabel(role){ return role==='admin' ? 'F&B Manager' : role==='maintenance' ? 'Maintenance' : role==='lancelot' ? 'Lancelot Management' : 'User'; }
+function roleClass(role){ return role==='admin' ? 'role-admin' : role==='maintenance' ? 'role-maint' : role==='lancelot' ? 'role-lancelot' : 'role-crew'; }
 
 function objToArray(obj){ return obj ? Object.keys(obj).map(k=>({id:k, ...obj[k]})) : []; }
 function arrayToObj(arr){ const o={}; arr.forEach(u=>{ const {id,...rest}=u; o[id]=rest; }); return o; }
@@ -626,9 +652,35 @@ async function loadAllSiteUsersForLogin(){
   }
 }
 
+async function loadLancelotMgmt(){
+  const snap = await refLancelotMgmt.once('value');
+  let needsPersist = false;
+  lancelotMgmt = snap.exists() ? objToArray(snap.val()).map(p=>{
+    if(!p.firstName && !p.lastName && p.name) needsPersist = true;
+    return migratePersonRecord(p);
+  }) : [];
+  if(needsPersist) await refLancelotMgmt.set(arrayToObj(lancelotMgmt));
+  refLancelotMgmt.on('value', s=>{ lancelotMgmt = s.exists()?objToArray(s.val()).map(migratePersonRecord):[]; renderLancelotMgmtList(); });
+}
+
+async function loadAllSiteUnitsForSummary(){
+  for(const key of SITE_ORDER){
+    const initialSnap = await db.ref('refrigeration/sites/'+key+'/units').once('value');
+    siteUnitsCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()) : [];
+  }
+  for(const key of SITE_ORDER){
+    db.ref('refrigeration/sites/'+key+'/units').on('value', snap=>{
+      siteUnitsCache[key] = snap.exists() ? objToArray(snap.val()) : [];
+      if(isLancelotMgmt()) renderLancelotSummary();
+    });
+  }
+}
+
 function findLoginMatch(pin){
   const sa = superadmins.find(u=>String(u.pin)===pin);
   if(sa) return { role:'superadmin', user:sa, site:null };
+  const lm = lancelotMgmt.find(u=>String(u.pin)===pin);
+  if(lm) return { role:'lancelot', user:lm, site:null };
   for(const key of SITE_ORDER){
     const match = (siteUsersCache[key]||[]).find(u=>String(u.pin)===pin);
     if(match) return { role:match.role||'crew', user:match, site:key };
@@ -717,10 +769,21 @@ function renderRoleControls(){
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
     document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
+    document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
 
     document.getElementById('maintenanceWorkerView').style.display = isMaintenanceWorker() ? 'block' : 'none';
     document.getElementById('dashboardAdminNav').style.display = isSiteAdmin() ? 'flex' : 'none';
-    if(isSiteAdmin()) switchMainView(currentMainView);
+    document.getElementById('navAllFairesBtn').style.display = isSuperadmin() ? 'inline-block' : 'none';
+    document.getElementById('statStrip').style.display = isLancelotMgmt() ? 'none' : 'flex';
+    document.getElementById('lancelotSummaryView').style.display = isLancelotMgmt() ? 'block' : 'none';
+
+    if(isLancelotMgmt()){
+      document.getElementById('normalDashboardWrap').style.display = 'none';
+      document.getElementById('maintenanceTicketsOverviewWrap').style.display = 'none';
+      document.getElementById('accessPanelWrap').style.display = 'none';
+      document.getElementById('allFairesView').style.display = 'none';
+      renderLancelotSummary();
+    } else if(isSiteAdmin()) switchMainView(currentMainView);
     else {
       document.getElementById('normalDashboardWrap').style.display = isMaintenanceWorker() ? 'none' : 'block';
       document.getElementById('maintenanceTicketsOverviewWrap').style.display = 'none';
@@ -749,9 +812,15 @@ async function submitLogin(){
   const match = findLoginMatch(pin);
   if(!match){ document.getElementById('loginError').textContent="Incorrect PIN."; return; }
   currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
+  closeLoginModal();
+  if(match.role==='lancelot'){
+    sessionStorage.setItem('rt_session_pin', pin);
+    showApp(true); renderRoleControls();
+    toast(`Logged in as ${fullName(match.user)} (Lancelot Management).`);
+    return;
+  }
   currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
   sessionStorage.setItem('rt_session_pin', pin);
-  closeLoginModal();
   await loadSiteData(currentSite);
   showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
   toast(`Logged in as ${fullName(match.user)} (${SITES[currentSite].name}).`);
@@ -764,6 +833,7 @@ async function restoreSession(){
   const match = findLoginMatch(pin);
   if(!match) return false;
   currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
+  if(match.role==='lancelot') return true; // no site to load
   currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
   await loadSiteData(currentSite);
   return true;
@@ -1096,13 +1166,24 @@ async function quickCompletePm(unitId, taskId){
 function switchMainView(view){
   currentMainView = view;
   const isDash = view==='dashboard';
+  const isAdmin = view==='admin';
+  const isAllFaires = view==='allfaires';
+
   document.getElementById('normalDashboardWrap').style.display = isDash ? 'block' : 'none';
   document.getElementById('maintenanceTicketsOverviewWrap').style.display = isDash ? 'block' : 'none';
-  document.getElementById('accessPanelWrap').style.display = isDash ? 'none' : 'block';
-  document.getElementById('navDashboardBtn').style.background = isDash ? 'var(--frost-deep)' : 'var(--card)';
-  document.getElementById('navDashboardBtn').style.color = isDash ? '#fff' : 'var(--ink)';
-  document.getElementById('navAdminBtn').style.background = isDash ? 'var(--card)' : 'var(--frost-deep)';
-  document.getElementById('navAdminBtn').style.color = isDash ? 'var(--ink)' : '#fff';
+  document.getElementById('accessPanelWrap').style.display = isAdmin ? 'block' : 'none';
+  document.getElementById('allFairesView').style.display = isAllFaires ? 'block' : 'none';
+
+  const setTab = (id, active) => {
+    const el = document.getElementById(id);
+    el.style.background = active ? 'var(--frost-deep)' : 'var(--card)';
+    el.style.color = active ? '#fff' : 'var(--ink)';
+  };
+  setTab('navDashboardBtn', isDash);
+  setTab('navAdminBtn', isAdmin);
+  if(document.getElementById('navAllFairesBtn').style.display !== 'none') setTab('navAllFairesBtn', isAllFaires);
+
+  if(isAllFaires) renderAllSitesOverview();
 }
 
 function openAddModal(){
@@ -1401,11 +1482,13 @@ function editSuperadmin(id){ editingSuperadminId = id; renderSuperadminList(); }
 function cancelSuperadminEdit(){ editingSuperadminId = null; renderSuperadminList(); }
 async function saveSuperadminEdit(id){
   const u = superadmins.find(x=>x.id===id); if(!u) return;
+  const newPin = document.getElementById(`edit_sa_pin_${id}`).value.trim();
+  if(isPinTakenAnywhere(newPin, id)){ toast('That PIN is already in use by someone else.'); return; }
   u.firstName = document.getElementById(`edit_sa_first_${id}`).value.trim();
   u.lastName = document.getElementById(`edit_sa_last_${id}`).value.trim();
   u.email = document.getElementById(`edit_sa_email_${id}`).value.trim() || null;
   u.phone = document.getElementById(`edit_sa_phone_${id}`).value.trim() || null;
-  u.pin = document.getElementById(`edit_sa_pin_${id}`).value.trim();
+  u.pin = newPin;
   editingSuperadminId = null;
   await persistSuperadmins(); renderSuperadminList(); toast('Saved.');
 }
@@ -1415,6 +1498,15 @@ async function removeSuperadmin(id){
   superadmins = superadmins.filter(u=>u.id!==id);
   await persistSuperadmins(); toast('Deleted.');
 }
+function isPinTakenAnywhere(pin, excludeId){
+  if(superadmins.some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
+  if(lancelotMgmt.some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
+  for(const key of SITE_ORDER){
+    if((siteUsersCache[key]||[]).some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
+  }
+  return false;
+}
+
 document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>{
   const firstName = document.getElementById('newSAFirst').value.trim();
   const lastName = document.getElementById('newSALast').value.trim();
@@ -1422,19 +1514,117 @@ document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>
   const phone = document.getElementById('newSAPhone').value.trim();
   const pin = document.getElementById('newSAPin').value.trim();
   if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
-  if(superadmins.some(u=>String(u.pin)===pin)){ toast('That PIN is already taken by another Superadmin.'); return; }
+  if(isPinTakenAnywhere(pin)){ toast('That PIN is already in use by someone else in the system.'); return; }
   superadmins.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
   await persistSuperadmins();
   document.getElementById('newSAFirst').value=''; document.getElementById('newSALast').value=''; document.getElementById('newSAEmail').value=''; document.getElementById('newSAPhone').value=''; document.getElementById('newSAPin').value='';
   toast(`Added ${firstName} as Superadmin.`);
 });
 
+document.getElementById('addLancelotMgmtBtn').addEventListener('click', async ()=>{
+  const firstName = document.getElementById('newLMFirst').value.trim();
+  const lastName = document.getElementById('newLMLast').value.trim();
+  const email = document.getElementById('newLMEmail').value.trim();
+  const phone = document.getElementById('newLMPhone').value.trim();
+  const pin = document.getElementById('newLMPin').value.trim();
+  if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
+  if(isPinTakenAnywhere(pin)){ toast('That PIN is already in use by someone else in the system.'); return; }
+  lancelotMgmt.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
+  await persistLancelotMgmt();
+  document.getElementById('newLMFirst').value=''; document.getElementById('newLMLast').value=''; document.getElementById('newLMEmail').value=''; document.getElementById('newLMPhone').value=''; document.getElementById('newLMPin').value='';
+  toast(`Added ${firstName} to Lancelot Management.`);
+});
+
+let editingLancelotMgmtId = null;
+function renderLancelotMgmtList(){
+  const wrap = document.getElementById('lancelotMgmtList'); if(!wrap) return;
+  const panel = document.getElementById('lancelotMgmtPanel');
+  if(panel) panel.style.display = isSuperadmin() ? 'block' : 'none';
+  if(!isSuperadmin()) return;
+  if(lancelotMgmt.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13px; padding:6px 0;">No Lancelot Management accounts yet.</div>`; return; }
+  wrap.innerHTML = lancelotMgmt.map(u=>{
+    if(editingLancelotMgmtId===u.id){
+      return `<div class="access-row">
+        <input class="name-col" style="flex:1 1 90px;" id="edit_lm_first_${u.id}" value="${escapeHtml(u.firstName||'')}" placeholder="First">
+        <input class="name-col" style="flex:1 1 90px;" id="edit_lm_last_${u.id}" value="${escapeHtml(u.lastName||'')}" placeholder="Last">
+        <input class="email-col" id="edit_lm_email_${u.id}" value="${escapeHtml(u.email||'')}" placeholder="email">
+        <input class="phone-col" id="edit_lm_phone_${u.id}" value="${escapeHtml(u.phone||'')}" placeholder="phone">
+        <input class="pin-col" id="edit_lm_pin_${u.id}" value="${escapeHtml(String(u.pin))}">
+        <button class="btn btn-primary btn-small" onclick="saveLancelotMgmtEdit('${u.id}')">Save</button>
+        <button class="btn btn-outline btn-small" onclick="cancelLancelotMgmtEdit()">Cancel</button>
+      </div>`;
+    }
+    return `<div class="access-row">
+      <b style="flex:1 1 140px;">${escapeHtml(fullName(u))}</b>
+      <span style="color:#888; font-size:12px; flex:1 1 150px;">${escapeHtml(u.email||'no email')}</span>
+      <span style="color:#888; font-size:12px; flex:1 1 110px;">${escapeHtml(u.phone||'no phone')}</span>
+      <span class="mono" style="font-size:12.5px;">PIN ${escapeHtml(String(u.pin))}</span>
+      <button class="btn btn-outline btn-small" onclick="editLancelotMgmt('${u.id}')">Edit</button>
+      <button class="btn btn-outline btn-small" onclick="removeLancelotMgmt('${u.id}')">Delete</button>
+    </div>`;
+  }).join('');
+}
+function editLancelotMgmt(id){ editingLancelotMgmtId = id; renderLancelotMgmtList(); }
+function cancelLancelotMgmtEdit(){ editingLancelotMgmtId = null; renderLancelotMgmtList(); }
+async function saveLancelotMgmtEdit(id){
+  const u = lancelotMgmt.find(x=>x.id===id); if(!u) return;
+  const newPin = document.getElementById(`edit_lm_pin_${id}`).value.trim();
+  if(isPinTakenAnywhere(newPin, id)){ toast('That PIN is already in use by someone else.'); return; }
+  u.firstName = document.getElementById(`edit_lm_first_${id}`).value.trim();
+  u.lastName = document.getElementById(`edit_lm_last_${id}`).value.trim();
+  u.email = document.getElementById(`edit_lm_email_${id}`).value.trim() || null;
+  u.phone = document.getElementById(`edit_lm_phone_${id}`).value.trim() || null;
+  u.pin = newPin;
+  editingLancelotMgmtId = null;
+  await persistLancelotMgmt(); renderLancelotMgmtList(); toast('Saved.');
+}
+async function removeLancelotMgmt(id){
+  if(!confirm('Delete this Lancelot Management account?')) return;
+  lancelotMgmt = lancelotMgmt.filter(u=>u.id!==id);
+  await persistLancelotMgmt(); toast('Deleted.');
+}
+async function persistLancelotMgmt(){ await refLancelotMgmt.set(arrayToObj(lancelotMgmt)); }
+
+function complianceStatsForUnits(unitList){
+  const ok = unitList.filter(u=>statusOf(u)==='ok').length;
+  const withData = unitList.filter(u=>statusOf(u)!=='unset').length;
+  return withData ? Math.round((ok/withData)*100) : null;
+}
+function renderLancelotSummary(){
+  const grid = document.getElementById('lancelotSummaryGrid'); if(!grid) return;
+  grid.innerHTML = SITE_ORDER.map(key=>{
+    const unitList = siteUnitsCache[key] || [];
+    const compliancePct = complianceStatsForUnits(unitList);
+    let totalChecks = 0, openTickets = 0, closedTickets = 0, pmCompleted = 0, pmTracked = 0, totalCost = 0;
+    unitList.forEach(u=>{
+      (u.history||[]).forEach(h=>{ if(!h.entryType || h.entryType==='check') totalChecks++; });
+      if(u.maintenanceTicket){
+        openTickets++;
+        totalCost += (u.maintenanceTicket.outsideServiceCalls||[]).reduce((s,c)=>s+(parseFloat(c.cost)||0),0);
+      }
+      (u.maintenanceHistory||[]).forEach(t=>{
+        closedTickets++;
+        totalCost += (t.outsideServiceCalls||[]).reduce((s,c)=>s+(parseFloat(c.cost)||0),0);
+      });
+      (u.pmTasks||[]).forEach(t=>{ pmTracked++; if(t.lastCompletedAt) pmCompleted++; });
+    });
+    return `<div class="card">
+      <div class="card-name" style="margin-bottom:6px;">${SITES[key].name}</div>
+      <div style="font-family:var(--mono); font-size:13px; line-height:1.9;">
+        <div>${unitList.length} units tracked ${compliancePct!==null?`· <b style="color:${compliancePct>=90?'var(--ok)':'var(--flag)'}">${compliancePct}% in compliance now</b>`:''}</div>
+        <div>${totalChecks} checks logged (all-time)</div>
+        <div>${openTickets} maintenance ticket${openTickets===1?'':'s'} open · ${closedTickets} closed (all-time)</div>
+        <div>${pmCompleted} / ${pmTracked} PM tasks completed at least once</div>
+        <div style="font-weight:700; color:var(--maint); margin-top:4px;">$${totalCost.toFixed(2)} total outside-service cost (all-time)</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // ---- Manage Access: Site Users (Admin/Crew, this site only) ----
 function renderAllSitesOverview(){
   const wrap = document.getElementById('allSitesOverviewList');
   if(!wrap) return;
-  const panel = document.getElementById('allSitesOverviewPanel');
-  if(panel) panel.style.display = isSuperadmin() ? 'block' : 'none';
   if(!isSuperadmin()) return;
   const rows = [];
   SITE_ORDER.forEach(key=>{
@@ -1499,12 +1689,14 @@ function cancelSiteUserEdit(){ editingSiteUserId = null; renderAccessList(); }
 async function saveSiteUserEdit(id){
   const list = siteUsersCache[currentSite] || [];
   const u = list.find(x=>x.id===id); if(!u) return;
+  const newPin = document.getElementById(`edit_su_pin_${id}`).value.trim();
+  if(isPinTakenAnywhere(newPin, id)){ toast('That PIN is already in use by someone else.'); return; }
   u.role = document.getElementById(`edit_su_role_${id}`).value;
   u.firstName = document.getElementById(`edit_su_first_${id}`).value.trim();
   u.lastName = document.getElementById(`edit_su_last_${id}`).value.trim();
   u.email = document.getElementById(`edit_su_email_${id}`).value.trim() || null;
   u.phone = document.getElementById(`edit_su_phone_${id}`).value.trim() || null;
-  u.pin = document.getElementById(`edit_su_pin_${id}`).value.trim();
+  u.pin = newPin;
   editingSiteUserId = null;
   await persistSiteUsers(); renderAccessList(); toast('Saved.');
 }
@@ -1517,7 +1709,7 @@ document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
   const role = document.getElementById('newPersonRole').value;
   if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
   const list = siteUsersCache[currentSite] || [];
-  if(list.some(u=>String(u.pin)===pin)){ toast('That PIN is already taken at this site.'); return; }
+  if(isPinTakenAnywhere(pin)){ toast('That PIN is already in use by someone else in the system.'); return; }
   list.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin, role });
   siteUsersCache[currentSite] = list;
   await persistSiteUsers();
@@ -1565,10 +1757,15 @@ document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.
 (async function init(){
   await migrateOldDataIfNeeded();
   await loadSuperadmins();
+  await loadLancelotMgmt();
   await loadAllSiteUsersForLogin();
+  await loadAllSiteUnitsForSummary();
   const restored = await restoreSession();
   if(restored){
-    showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
+    showApp(true); renderRoleControls();
+    if(currentRole!=='lancelot'){
+      render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
+    }
   } else {
     showApp(false); openLoginModal();
   }
