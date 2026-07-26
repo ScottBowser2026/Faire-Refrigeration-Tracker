@@ -103,6 +103,9 @@
   .card-actions .btn{ flex:1; }
 
   .alert-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:13.5px; }
+  .checklist-row{ display:flex; justify-content:space-between; align-items:center; gap:12px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; margin-bottom:10px; }
+  .checklist-row .name{ font-weight:700; font-size:15px; }
+  .checklist-row .loc{ font-family:var(--mono); font-size:11px; color:#888; }
   .alert-row:last-child{ border-bottom:none; }
   .alert-row .meta{ font-family:var(--mono); font-size:11px; color:#888; }
   .alert-resolved{ font-family:var(--mono); font-size:10.5px; padding:2px 7px; border-radius:5px; background:var(--ok-bg); color:var(--ok); white-space:nowrap; }
@@ -215,10 +218,14 @@
     <button class="btn btn-outline" id="notifyBtn">Alert flagged</button>
     <button class="btn btn-outline" id="reportBtn">Not-checked report</button>
     <button class="btn btn-outline" id="masterReportBtn" style="display:none">Master report</button>
+    <button class="btn btn-primary" id="submitDailyReportBtn">Submit Daily Report</button>
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
   </div>
 
   <div class="grid" id="unitGrid"></div>
+
+  <div class="section-head"><h2>Daily Reports</h2><span class="hint">Snapshot of compliance each time "Submit Daily Report" is used</span></div>
+  <div class="panel" id="dailyReportsList"></div>
 
   </div><!-- /normalDashboardWrap -->
 
@@ -227,6 +234,12 @@
     <div id="maintenancePmDueList"></div>
     <div class="section-head"><h2>My Maintenance List</h2><span class="hint">Units currently flagged for maintenance at this site</span></div>
     <div id="maintenanceWorkerList"></div>
+  </div>
+
+  <!-- USER CHECKLIST VIEW (User/crew role only — replaces the dashboard above) -->
+  <div id="userWorkerView" style="display:none">
+    <div class="section-head"><h2>My Units to Check</h2><span class="hint">Assigned to you · resets each day as you log checks</span></div>
+    <div id="userWorkerList"></div>
   </div>
 
   <!-- MAINTENANCE TICKETS OVERVIEW (F&B Manager / Superadmin only) -->
@@ -247,7 +260,7 @@
         <input type="text" id="newSALast" placeholder="Last name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newSAEmail" placeholder="Email" style="flex:1; min-width:150px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newSAPhone" placeholder="Phone" style="flex:1; min-width:130px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
-        <input type="text" id="newSAPin" placeholder="PIN" style="width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newSAPin" placeholder="PIN (optional)" style="width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <button class="btn btn-primary btn-small" id="addSuperadminBtn">Add</button>
       </div>
     </div>
@@ -260,7 +273,7 @@
         <input type="text" id="newLMLast" placeholder="Last name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newLMEmail" placeholder="Email" style="flex:1; min-width:150px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newLMPhone" placeholder="Phone" style="flex:1; min-width:130px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
-        <input type="text" id="newLMPin" placeholder="PIN" style="width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newLMPin" placeholder="PIN (optional)" style="width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <button class="btn btn-primary btn-small" id="addLancelotMgmtBtn">Add</button>
       </div>
     </div>
@@ -273,7 +286,7 @@
         <input type="text" id="newPersonLast" placeholder="Last name" style="flex:1; min-width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonEmail" placeholder="Email" style="flex:1; min-width:140px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonPhone" placeholder="Phone" style="flex:1; min-width:120px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
-        <input type="text" id="newPersonPin" placeholder="PIN" style="width:80px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newPersonPin" placeholder="PIN (optional)" style="width:80px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <select id="newPersonRole" style="flex:1; min-width:140px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
           <option value="crew">User</option>
           <option value="admin">F&amp;B Manager</option>
@@ -346,6 +359,7 @@
     </div>
     <div class="field"><label>Location</label><input type="text" id="u_location"></div>
     <div class="field"><label>Stock / contents</label><input type="text" id="u_stock"></div>
+    <div class="field"><label>Assigned User <span class="hint">(who's responsible for daily checks)</span></label><select id="u_assigned_user"></select></div>
     <div class="two-col">
       <div class="field"><label>Target min °F</label><input type="text" id="u_tmin"></div>
       <div class="field"><label>Target max °F</label><input type="text" id="u_tmax"></div>
@@ -366,6 +380,7 @@
 
     <div id="ticketOpenForm">
       <div class="field"><label>Reason for maintenance</label><textarea id="ticket_reason" rows="3" placeholder="Describe the issue…"></textarea></div>
+      <div class="field"><label>Assign to</label><select id="ticket_assignee"></select></div>
       <div class="modal-actions">
         <button class="btn btn-outline" onclick="closeTicketModal()">Cancel</button>
         <button class="btn btn-primary" onclick="openMaintenanceTicket()">Open Ticket</button>
@@ -373,7 +388,14 @@
     </div>
 
     <div id="ticketDetailView" style="display:none">
-      <div id="ticketReasonDisplay" style="font-size:13.5px; padding:8px 10px; background:var(--maint-bg); border-radius:7px; margin-bottom:12px;"></div>
+      <div id="ticketReasonDisplay" style="font-size:13.5px; padding:8px 10px; background:var(--maint-bg); border-radius:7px; margin-bottom:8px;"></div>
+      <div id="ticketAssigneeWrap" style="margin-bottom:12px; display:none;">
+        <div style="font-size:12px; color:#888; margin-bottom:4px;">Assigned to</div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="ticket_reassign_select" style="flex:1;"></select>
+          <button class="btn btn-outline btn-small" onclick="reassignTicket()">Reassign</button>
+        </div>
+      </div>
 
       <div style="font-weight:700; font-size:13px; margin-bottom:6px;">Entries / Notes</div>
       <div id="ticketEntriesList" style="max-height:220px; overflow-y:auto; margin-bottom:10px;"></div>
@@ -432,6 +454,7 @@
           </select>
         </div>
       </div>
+      <div class="field"><label>Assign to</label><select id="pm_assignee"></select></div>
       <button class="btn btn-primary" style="width:100%;" onclick="addPmTask()">Add PM Task</button>
     </div>
 
@@ -521,6 +544,15 @@
   </div>
 </div>
 
+<div class="overlay" id="dailyReportOverlay">
+  <div class="modal" style="max-width:520px;">
+    <h2>Daily Report</h2>
+    <div class="sub" id="dailyReportSub"></div>
+    <div id="dailyReportBody" style="max-height:60vh; overflow-y:auto; margin:10px 0;"></div>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeDailyReportModal()">Close</button></div>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 <script>
@@ -561,6 +593,8 @@ let siteUnitsCache = {}; // siteKey -> array of units, kept live-synced across A
 let siteUsersCache = {};      // siteKey -> array of {id,name,email,phone,pin,role:'admin'|'crew'}
 let units = [];
 let recipients = [];
+let dailyReports = [];
+let dailyReportsListenerRef = null;
 let currentUser = "";
 let currentUserId = null;
 let currentRole = null;       // 'superadmin' | 'admin' | 'crew'
@@ -589,6 +623,9 @@ function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg
 function isSuperadmin(){ return currentRole==='superadmin'; }
 function isSiteAdmin(){ return currentRole==='admin' || currentRole==='superadmin'; }
 function isMaintenanceWorker(){ return currentRole==='maintenance'; }
+function isUserRole(){ return currentRole==='crew'; }
+function isCheckedToday(u){ return u.lastCheckAt && localDateKeyFor(u.lastCheckAt)===localDateKey(); }
+function localDateKeyFor(iso){ const d=new Date(iso); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function isLancelotMgmt(){ return currentRole==='lancelot'; }
 function roleLabel(role){ return role==='admin' ? 'F&B Manager' : role==='maintenance' ? 'Maintenance' : role==='lancelot' ? 'Lancelot Management' : 'User'; }
 function roleClass(role){ return role==='admin' ? 'role-admin' : role==='maintenance' ? 'role-maint' : role==='lancelot' ? 'role-lancelot' : 'role-crew'; }
@@ -694,6 +731,7 @@ async function loadSiteData(siteKey){
   if(unitsListenerRef) unitsListenerRef.off();
   if(recipientsListenerRef) recipientsListenerRef.off();
   if(usersListenerRef) usersListenerRef.off();
+  if(dailyReportsListenerRef) dailyReportsListenerRef.off();
 
   const unitsSnap = await siteRef('units', siteKey).once('value');
   units = objToArray(unitsSnap.val());
@@ -702,16 +740,22 @@ async function loadSiteData(siteKey){
   const recSnap = await siteRef('notifyRecipients', siteKey).once('value');
   recipients = recSnap.exists() ? objToArray(recSnap.val()) : [];
 
+  const drSnap = await siteRef('dailyReports', siteKey).once('value');
+  dailyReports = drSnap.exists() ? objToArray(drSnap.val()) : [];
+
   unitsListenerRef = siteRef('units', siteKey);
-  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; }); render(); renderFleetChart(); renderIncidents(); });
+  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); });
   recipientsListenerRef = siteRef('notifyRecipients', siteKey);
   recipientsListenerRef.on('value', snap=>{ recipients = snap.exists()?objToArray(snap.val()):[]; renderRecipientList(); });
+  dailyReportsListenerRef = siteRef('dailyReports', siteKey);
+  dailyReportsListenerRef.on('value', snap=>{ dailyReports = snap.exists()?objToArray(snap.val()):[]; renderDailyReportsList(); });
   usersListenerRef = null; // users are now kept in sync globally via loadAllSiteUsersForLogin's live listeners
 }
 
 async function persistUnits(){ await siteRef('units').set(arrayToObj(units)); }
 async function persistSiteUsers(){ await siteRef('users').set(arrayToObj(siteUsersCache[currentSite]||[])); }
 async function persistRecipients(){ await siteRef('notifyRecipients').set(arrayToObj(recipients)); }
+async function persistDailyReports(){ await siteRef('dailyReports').set(arrayToObj(dailyReports)); }
 async function persistSuperadmins(){ await refSuperadmins.set(arrayToObj(superadmins)); }
 
 function statusOf(u){
@@ -762,7 +806,7 @@ function renderRoleControls(){
         currentSite = e.target.value;
         sessionStorage.setItem('rt_last_site', currentSite);
         await loadSiteData(currentSite);
-        renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList();
+        renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderDailyReportsList(); renderUserWorkerList();
         toast(`Switched to ${SITES[currentSite].name}.`);
       });
     }
@@ -773,6 +817,7 @@ function renderRoleControls(){
     document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
 
     document.getElementById('maintenanceWorkerView').style.display = isMaintenanceWorker() ? 'block' : 'none';
+    document.getElementById('userWorkerView').style.display = isUserRole() ? 'block' : 'none';
     document.getElementById('dashboardAdminNav').style.display = isSiteAdmin() ? 'flex' : 'none';
     document.getElementById('navAllFairesBtn').style.display = isSuperadmin() ? 'inline-block' : 'none';
     document.getElementById('statStrip').style.display = isLancelotMgmt() ? 'none' : 'flex';
@@ -786,9 +831,10 @@ function renderRoleControls(){
       renderLancelotSummary();
     } else if(isSiteAdmin()) switchMainView(currentMainView);
     else {
-      document.getElementById('normalDashboardWrap').style.display = isMaintenanceWorker() ? 'none' : 'block';
+      document.getElementById('normalDashboardWrap').style.display = (isMaintenanceWorker()||isUserRole()) ? 'none' : 'block';
       document.getElementById('maintenanceTicketsOverviewWrap').style.display = 'none';
       document.getElementById('accessPanelWrap').style.display = 'none';
+      if(isUserRole()) renderUserWorkerList();
     }
   } else {
     whoBox.innerHTML = `<button class="btn who-btn btn-small" id="loginBtn">Log In</button>`;
@@ -823,10 +869,24 @@ async function submitLogin(){
   currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
   sessionStorage.setItem('rt_session_pin', pin);
   await loadSiteData(currentSite);
-  showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
+  showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderDailyReportsList(); renderUserWorkerList(); renderSuperadminList();
   toast(`Logged in as ${fullName(match.user)} (${SITES[currentSite].name}).`);
+  handleDeepLink();
 }
 document.getElementById('login_pin').addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
+
+// ---- Deep-linking — for opening a specific unit/ticket/PM/report directly from a text or email link ----
+// URL formats: ?unit=UNITID&view=ticket | ?unit=UNITID&view=pm | ?report=REPORTID
+// Only resolves against whichever site the logged-in person lands on.
+function handleDeepLink(){
+  const params = new URLSearchParams(window.location.search);
+  const unitId = params.get('unit');
+  const view = params.get('view');
+  const reportId = params.get('report');
+  if(reportId){ openDailyReportModal(reportId); return; }
+  if(unitId && view==='ticket'){ openTicketModal(unitId); return; }
+  if(unitId && view==='pm'){ openPmModal(unitId); return; }
+}
 
 async function restoreSession(){
   const pin = sessionStorage.getItem('rt_session_pin');
@@ -856,6 +916,12 @@ function closeForgotPin(){
   document.getElementById('loginPanel').style.display='block';
 }
 function generateNewPin(){ return String(Math.floor(1000 + Math.random()*9000)); }
+function emailReady(){ return !!window.emailjs; }
+function generateUniquePin(){
+  let pin, attempts = 0;
+  do { pin = generateNewPin(); attempts++; } while(isPinTakenAnywhere(pin) && attempts < 50);
+  return pin;
+}
 async function sendForgotPin(){
   const email = document.getElementById('forgot_email').value.trim().toLowerCase();
   const msg = document.getElementById('forgotPinMsg');
@@ -936,6 +1002,7 @@ function render(){
       ${ticketBadgeHtml}
       ${pmBadgeHtml}
       <div class="card-last">${neverChecked(u)?'Never checked':`Last: ${fmtDate(u.lastCheckAt)} · ${escapeHtml(u.lastCheckBy||'')}`}</div>
+      <div class="card-last">${u.assignedUserName?`Assigned to: ${escapeHtml(u.assignedUserName)}`:'Unassigned'}</div>
       <div class="card-actions">
         <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log entry</button>
         <button class="btn btn-outline btn-small" onclick="openHistoryModal('${u.id}')">History</button>
@@ -949,10 +1016,16 @@ function render(){
 
 // ---- Maintenance Tickets ----
 let ticketModalUnitId = null;
+function maintenanceWorkersAtSite(siteKey){
+  return (siteUsersCache[siteKey]||[]).filter(u=>u.role==='maintenance');
+}
 function openTicketModal(unitId){
   ticketModalUnitId = unitId;
   const u = units.find(x=>x.id===unitId); if(!u) return;
   document.getElementById('ticketModalTitle').textContent = `Maintenance Ticket — ${u.name}`;
+  const assigneeSelect = document.getElementById('ticket_assignee');
+  const workers = maintenanceWorkersAtSite(currentSite);
+  assigneeSelect.innerHTML = `<option value="">Unassigned (visible to all Maintenance workers)</option>` + workers.map(w=>`<option value="${w.id}">${escapeHtml(fullName(w))}</option>`).join('');
   renderTicketModal();
   document.getElementById('ticketOverlay').classList.add('show');
 }
@@ -973,6 +1046,14 @@ function renderTicketModal(){
   openForm.style.display = 'none'; detailView.style.display = 'block'; closeRow.style.display = 'flex';
   document.getElementById('ticketModalSub').textContent = `Opened ${fmtDate(ticket.openedAt)} by ${ticket.openedBy}`;
   document.getElementById('ticketReasonDisplay').textContent = ticket.reason;
+
+  const assigneeWrap = document.getElementById('ticketAssigneeWrap');
+  assigneeWrap.style.display = isSiteAdmin() ? 'block' : 'none';
+  if(isSiteAdmin()){
+    const reassignSelect = document.getElementById('ticket_reassign_select');
+    const workers = maintenanceWorkersAtSite(currentSite);
+    reassignSelect.innerHTML = `<option value="">Unassigned (visible to all Maintenance workers)</option>` + workers.map(w=>`<option value="${w.id}" ${ticket.assignedToId===w.id?'selected':''}>${escapeHtml(fullName(w))}</option>`).join('');
+  }
 
   const entriesList = document.getElementById('ticketEntriesList');
   const entries = (ticket.entries||[]).slice().reverse();
@@ -1006,8 +1087,18 @@ async function openMaintenanceTicket(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u) return;
   const reason = document.getElementById('ticket_reason').value.trim();
   if(!reason){ toast('Describe the reason for maintenance.'); return; }
-  u.maintenanceTicket = { openedBy:currentUser, openedAt:new Date().toISOString(), reason, entries:[], outsideServiceCalls:[] };
-  await persistUnits(); renderTicketModal(); render(); toast('Maintenance ticket opened.');
+  const assigneeId = document.getElementById('ticket_assignee').value;
+  const assignee = assigneeId ? maintenanceWorkersAtSite(currentSite).find(w=>w.id===assigneeId) : null;
+  u.maintenanceTicket = { openedBy:currentUser, openedAt:new Date().toISOString(), reason, entries:[], outsideServiceCalls:[], assignedToId: assigneeId||null, assignedToName: assignee?fullName(assignee):null };
+  await persistUnits(); renderTicketModal(); render(); renderMaintenanceWorkerList(); toast(assignee ? `Ticket opened and assigned to ${fullName(assignee)}.` : 'Maintenance ticket opened.');
+}
+async function reassignTicket(){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
+  const assigneeId = document.getElementById('ticket_reassign_select').value;
+  const assignee = assigneeId ? maintenanceWorkersAtSite(currentSite).find(w=>w.id===assigneeId) : null;
+  u.maintenanceTicket.assignedToId = assigneeId || null;
+  u.maintenanceTicket.assignedToName = assignee ? fullName(assignee) : null;
+  await persistUnits(); render(); renderMaintenanceWorkerList(); toast(assignee ? `Reassigned to ${fullName(assignee)}.` : 'Unassigned — visible to all Maintenance workers again.');
 }
 async function addTicketEntry(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
@@ -1045,7 +1136,7 @@ async function closeMaintenanceTicket(){
 function renderMaintenanceWorkerList(){
   const wrap = document.getElementById('maintenanceWorkerList'); if(!wrap) return;
   if(!isMaintenanceWorker()) return;
-  const flagged = units.filter(u=>u.maintenanceTicket);
+  const flagged = units.filter(u=>u.maintenanceTicket && (!u.maintenanceTicket.assignedToId || u.maintenanceTicket.assignedToId===currentUserId));
   if(flagged.length===0){ wrap.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">Nothing flagged for maintenance right now.</div>`; return; }
   wrap.innerHTML = flagged.map(u=>`
     <div class="panel" style="cursor:pointer;" onclick="openTicketModal('${u.id}')">
@@ -1058,6 +1149,26 @@ function renderMaintenanceWorkerList(){
       </div>
       <div style="font-size:13.5px; margin-top:8px;">${escapeHtml(u.maintenanceTicket.reason)}</div>
       <div style="font-size:12px; color:#888; margin-top:6px;">${(u.maintenanceTicket.entries||[]).length} entr${(u.maintenanceTicket.entries||[]).length===1?'y':'ies'} logged so far</div>
+      ${u.maintenanceTicket.assignedToName?`<div style="font-size:11.5px; color:var(--maint); margin-top:2px;">Assigned to you</div>`:''}
+    </div>`).join('');
+}
+
+function renderUserWorkerList(){
+  const wrap = document.getElementById('userWorkerList'); if(!wrap) return;
+  if(!isUserRole()) return;
+  const myUnits = units.filter(u=>u.assignedUserId===currentUserId && !isCheckedToday(u));
+  if(myUnits.length===0){
+    wrap.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">${units.some(u=>u.assignedUserId===currentUserId) ? "All your assigned units are checked for today — nice work!" : "No units are assigned to you yet — ask your F&B Manager."}</div>`;
+    return;
+  }
+  const sorted = myUnits.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  wrap.innerHTML = sorted.map(u=>`
+    <div class="checklist-row">
+      <div>
+        <div class="name">${escapeHtml(u.name)}</div>
+        <div class="loc">${escapeHtml(u.location||'')}</div>
+      </div>
+      <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log Check</button>
     </div>`).join('');
 }
 
@@ -1090,6 +1201,8 @@ function openPmModal(unitId){
   const u = units.find(x=>x.id===unitId); if(!u) return;
   document.getElementById('pmModalTitle').textContent = `PM Tasks — ${u.name}`;
   document.getElementById('pm_name').value=''; document.getElementById('pm_interval').value=''; document.getElementById('pm_preset').value='';
+  const workers = maintenanceWorkersAtSite(currentSite);
+  document.getElementById('pm_assignee').innerHTML = `<option value="">Unassigned (visible to all Maintenance workers)</option>` + workers.map(w=>`<option value="${w.id}">${escapeHtml(fullName(w))}</option>`).join('');
   renderPmTaskList();
   document.getElementById('pmOverlay').classList.add('show');
 }
@@ -1107,6 +1220,7 @@ function renderPmTaskList(){
     return `<div style="padding:9px 0; border-bottom:1px solid var(--border); font-size:13.5px;">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
         <div><b>${escapeHtml(t.name)}</b><div style="font-family:var(--mono); font-size:11px; color:#888;">every ${t.intervalDays} days · ${statusText}</div>
+        ${t.assignedToName?`<div style="font-size:11.5px; color:var(--maint);">assigned to ${escapeHtml(t.assignedToName)}</div>`:''}
         ${t.lastCompletedAt?`<div style="font-size:11.5px; color:#888;">last done ${fmtDate(t.lastCompletedAt)}${t.lastCompletedBy?' by '+escapeHtml(t.lastCompletedBy):''}</div>`:'<div style="font-size:11.5px; color:#888;">never completed yet</div>'}</div>
         <div style="display:flex; gap:6px; flex-shrink:0;">
           <button class="btn btn-outline btn-small" onclick="completePmTask('${t.id}')">Mark Done</button>
@@ -1121,11 +1235,13 @@ async function addPmTask(){
   const name = document.getElementById('pm_name').value.trim();
   const interval = parseInt(document.getElementById('pm_interval').value, 10);
   if(!name || !interval || interval<1){ toast('Enter a task name and a valid interval in days.'); return; }
+  const assigneeId = document.getElementById('pm_assignee').value;
+  const assignee = assigneeId ? maintenanceWorkersAtSite(currentSite).find(w=>w.id===assigneeId) : null;
   if(!u.pmTasks) u.pmTasks=[];
-  u.pmTasks.push({ id:uid(), name, intervalDays:interval, createdBy:currentUser, createdAt:new Date().toISOString(), lastCompletedAt:null, lastCompletedBy:null });
-  await persistUnits(); renderPmTaskList(); render(); renderMaintenanceWorkerList();
+  u.pmTasks.push({ id:uid(), name, intervalDays:interval, createdBy:currentUser, createdAt:new Date().toISOString(), lastCompletedAt:null, lastCompletedBy:null, assignedToId: assigneeId||null, assignedToName: assignee?fullName(assignee):null });
+  await persistUnits(); renderPmTaskList(); render(); renderMaintenanceWorkerList(); renderMaintenancePmDueList();
   document.getElementById('pm_name').value=''; document.getElementById('pm_interval').value=''; document.getElementById('pm_preset').value='';
-  toast('PM task added.');
+  toast(assignee ? `PM task added and assigned to ${fullName(assignee)}.` : 'PM task added.');
 }
 async function completePmTask(taskId){
   const u = units.find(x=>x.id===pmModalUnitId); if(!u) return;
@@ -1143,8 +1259,9 @@ async function deletePmTask(taskId){
 }
 function renderMaintenancePmDueList(){
   const wrap = document.getElementById('maintenancePmDueList'); if(!wrap) return;
+  if(!isMaintenanceWorker()){ wrap.innerHTML=''; return; }
   const dueUnits = [];
-  units.forEach(u=>{ (u.pmTasks||[]).forEach(t=>{ if(pmDueInfo(t).isDue) dueUnits.push({u,t}); }); });
+  units.forEach(u=>{ (u.pmTasks||[]).forEach(t=>{ if(pmDueInfo(t).isDue && (!t.assignedToId || t.assignedToId===currentUserId)) dueUnits.push({u,t}); }); });
   if(dueUnits.length===0){ wrap.innerHTML=''; return; }
   wrap.innerHTML = `<div class="section-head"><h2>Scheduled PM Due</h2></div>` + dueUnits.map(({u,t})=>{
     const info = pmDueInfo(t);
@@ -1189,12 +1306,19 @@ function switchMainView(view){
   if(isAllFaires) renderAllSitesOverview();
 }
 
+function usersWithRole(role){ return (siteUsersCache[currentSite]||[]).filter(u=>u.role===role); }
+function populateAssignedUserSelect(currentAssignedId){
+  const sel = document.getElementById('u_assigned_user');
+  const users = usersWithRole('crew');
+  sel.innerHTML = `<option value="">Unassigned</option>` + users.map(u=>`<option value="${u.id}" ${currentAssignedId===u.id?'selected':''}>${escapeHtml(fullName(u))}</option>`).join('');
+}
 function openAddModal(){
   editingUnitId=null;
   document.getElementById('unitModalTitle').textContent='Add Unit';
   document.getElementById('deleteUnitBtn').style.display='none';
   ['u_name','u_location','u_stock','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('u_type').value='cooler'; document.getElementById('u_runtime').value='always';
+  populateAssignedUserSelect(null);
   document.getElementById('unitOverlay').classList.add('show');
 }
 function openEditModal(unitId){
@@ -1209,6 +1333,7 @@ function openEditModal(unitId){
   document.getElementById('u_stock').value=u.stock||'';
   document.getElementById('u_tmin').value=u.tmin!=null?u.tmin:'';
   document.getElementById('u_tmax').value=u.tmax!=null?u.tmax:'';
+  populateAssignedUserSelect(u.assignedUserId||null);
   document.getElementById('unitOverlay').classList.add('show');
 }
 function closeUnitModal(){ document.getElementById('unitOverlay').classList.remove('show'); }
@@ -1217,12 +1342,14 @@ async function saveUnit(){
   if(!name){ toast('Enter a name.'); return; }
   const tmin = parseFloat(document.getElementById('u_tmin').value);
   const tmax = parseFloat(document.getElementById('u_tmax').value);
+  const assignedId = document.getElementById('u_assigned_user').value;
+  const assignedUser = assignedId ? usersWithRole('crew').find(x=>x.id===assignedId) : null;
   const data = { name, type:document.getElementById('u_type').value, runtime:document.getElementById('u_runtime').value,
     location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
-    tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax };
+    tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserId: assignedId||null, assignedUserName: assignedUser?fullName(assignedUser):null };
   if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); Object.assign(u,data); }
   else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
-  await persistUnits(); closeUnitModal(); render(); renderFleetChart(); toast('Saved.');
+  await persistUnits(); closeUnitModal(); render(); renderFleetChart(); renderUserWorkerList(); toast('Saved.');
 }
 document.getElementById('deleteUnitBtn').addEventListener('click', async ()=>{
   if(!editingUnitId) return;
@@ -1272,7 +1399,7 @@ async function saveCheck(){
     if(type==='repair') entry.performedBy = document.getElementById('c_performedby').value;
     u.history.push(entry);
   }
-  await persistUnits(); closeCheckModal(); render(); renderFleetChart(); renderIncidents();
+  await persistUnits(); closeCheckModal(); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList();
   toast(type==='check'?'Check logged.':`${type[0].toUpperCase()+type.slice(1)} note logged.`);
 }
 
@@ -1401,6 +1528,64 @@ async function sendMasterReport(){
   if(ok){ toast('Master report sent.'); closeMasterReportModal(); }
 }
 document.getElementById('masterReportBtn').addEventListener('click', openMasterReportModal);
+
+// ---- Daily Report (compiled snapshot + stubbed text-notification hook) ----
+function localDateKey(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+async function submitDailyReport(){
+  const flagged = units.filter(u=>statusOf(u)==='flag').map(u=>({ name:u.name, location:u.location||'', reasons: complianceReasons(u).join(', ')||'flagged' }));
+  const notChecked = units.filter(u=>neverChecked(u)||isStale(u)).map(u=>({ name:u.name, location:u.location||'' }));
+  const compliant = units.length - flagged.length - notChecked.length;
+  if(!confirm(`Submit today's report for ${SITES[currentSite].name}? ${flagged.length} flagged, ${notChecked.length} not checked, ${compliant} compliant.`)) return;
+  const report = {
+    id: uid(), date: localDateKey(), submittedBy: currentUser, submittedAt: new Date().toISOString(),
+    totalUnits: units.length, compliantCount: compliant, flaggedCount: flagged.length, notCheckedCount: notChecked.length,
+    flaggedUnits: flagged, notCheckedUnits: notChecked
+  };
+  dailyReports.push(report);
+  await persistDailyReports();
+  renderDailyReportsList();
+  toast('Daily report submitted.');
+  notifyDailyReportReady(report);
+}
+
+// STUB — wire this up once the Twilio Cloud Functions backend (Part 3) exists for this tracker.
+// Should text every F&B Manager at this site: "Daily report for {date} at {site} is available for
+// viewing: {deep link}". The deep link should be this site's URL with ?report={report.id} so it
+// opens straight to openDailyReportModal(report.id) after login — see the deep-link handling in init().
+function notifyDailyReportReady(report){
+  console.log('[stub] Would text F&B Managers about report', report.id, '— Twilio backend not yet connected.');
+}
+
+function renderDailyReportsList(){
+  const wrap = document.getElementById('dailyReportsList'); if(!wrap) return;
+  const sorted = dailyReports.slice().sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
+  if(sorted.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13.5px;">No daily reports submitted yet.</div>`; return; }
+  wrap.innerHTML = sorted.slice(0,14).map(r=>`
+    <div class="alert-row" style="cursor:pointer;" onclick="openDailyReportModal('${r.id}')">
+      <div><b>${r.date}</b> <span class="meta">submitted by ${escapeHtml(r.submittedBy)}</span></div>
+      <div style="text-align:right;">
+        <span style="color:var(--ok); font-size:12.5px;">${r.compliantCount} ok</span> ·
+        <span style="color:var(--flag); font-size:12.5px;">${r.flaggedCount} flagged</span> ·
+        <span style="color:var(--unset); font-size:12.5px;">${r.notCheckedCount} not checked</span>
+      </div>
+    </div>`).join('');
+}
+function openDailyReportModal(reportId){
+  const r = dailyReports.find(x=>x.id===reportId); if(!r) return;
+  document.getElementById('dailyReportSub').textContent = `${r.date} — submitted by ${r.submittedBy} at ${fmtDate(r.submittedAt)}`;
+  const body = document.getElementById('dailyReportBody');
+  const section = (title,list,color,line) => list.length ? `<div style="margin-bottom:14px;">
+    <div style="font-family:var(--mono); font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:${color}; font-weight:700; margin-bottom:6px;">${title} (${list.length})</div>
+    ${list.map(u=>`<div style="padding:6px 0; border-bottom:1px solid var(--border); font-size:13.5px;"><b>${escapeHtml(u.name)}</b> <span style="color:#888; font-family:var(--mono); font-size:11px;">(${escapeHtml(u.location||'')})</span>
+    ${line(u)?`<div style="font-family:var(--mono); font-size:11.5px; color:${color};">${line(u)}</div>`:''}</div>`).join('')}
+  </div>` : '';
+  body.innerHTML = section('Flagged', r.flaggedUnits||[], 'var(--flag)', u=>u.reasons)
+    + section('Not Checked', r.notCheckedUnits||[], 'var(--unset)', ()=>'')
+    + `<div style="font-family:var(--mono); font-size:12px; color:#777; padding-top:6px;">${r.compliantCount} unit(s) compliant and checked · ${r.totalUnits} total units in the system at submission time.</div>`;
+  document.getElementById('dailyReportOverlay').classList.add('show');
+}
+function closeDailyReportModal(){ document.getElementById('dailyReportOverlay').classList.remove('show'); }
+document.getElementById('submitDailyReportBtn').addEventListener('click', submitDailyReport);
 document.getElementById('notifyBtn').addEventListener('click', async ()=>{
   const flagged = visibleUnits().filter(u=>statusOf(u)==='flag');
   if(flagged.length===0){ toast('Nothing flagged in view right now.'); return; }
@@ -1515,13 +1700,16 @@ document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>
   const lastName = document.getElementById('newSALast').value.trim();
   const email = document.getElementById('newSAEmail').value.trim();
   const phone = document.getElementById('newSAPhone').value.trim();
-  const pin = document.getElementById('newSAPin').value.trim();
-  if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
-  if(isPinTakenAnywhere(pin)){ toast('That PIN is already in use by someone else in the system.'); return; }
+  const typedPin = document.getElementById('newSAPin').value.trim();
+  if(!firstName){ toast('Enter at least a first name.'); return; }
+  if(typedPin && !/^\d{4,6}$/.test(typedPin)){ toast('PIN must be 4-6 digits, or leave it blank to auto-generate one.'); return; }
+  if(typedPin && isPinTakenAnywhere(typedPin)){ toast('That PIN is already in use by someone else in the system.'); return; }
+  const pin = typedPin || generateUniquePin();
   superadmins.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
   await persistSuperadmins();
+  if(!typedPin && email && emailReady()) sendEmailTo(email, 'Your Refrigeration Tracker PIN', `Hi ${firstName},\n\nYou've been added as a Superadmin on the Refrigeration Tracker. Your PIN is: ${pin}\n\nUse it at the login screen.`);
   document.getElementById('newSAFirst').value=''; document.getElementById('newSALast').value=''; document.getElementById('newSAEmail').value=''; document.getElementById('newSAPhone').value=''; document.getElementById('newSAPin').value='';
-  toast(`Added ${firstName} as Superadmin.`);
+  toast(!typedPin ? `Added ${firstName} as Superadmin — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName} as Superadmin.`);
 });
 
 document.getElementById('addLancelotMgmtBtn').addEventListener('click', async ()=>{
@@ -1529,13 +1717,16 @@ document.getElementById('addLancelotMgmtBtn').addEventListener('click', async ()
   const lastName = document.getElementById('newLMLast').value.trim();
   const email = document.getElementById('newLMEmail').value.trim();
   const phone = document.getElementById('newLMPhone').value.trim();
-  const pin = document.getElementById('newLMPin').value.trim();
-  if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
-  if(isPinTakenAnywhere(pin)){ toast('That PIN is already in use by someone else in the system.'); return; }
+  const typedPin = document.getElementById('newLMPin').value.trim();
+  if(!firstName){ toast('Enter at least a first name.'); return; }
+  if(typedPin && !/^\d{4,6}$/.test(typedPin)){ toast('PIN must be 4-6 digits, or leave it blank to auto-generate one.'); return; }
+  if(typedPin && isPinTakenAnywhere(typedPin)){ toast('That PIN is already in use by someone else in the system.'); return; }
+  const pin = typedPin || generateUniquePin();
   lancelotMgmt.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
   await persistLancelotMgmt();
+  if(!typedPin && email && emailReady()) sendEmailTo(email, 'Your Refrigeration Tracker PIN', `Hi ${firstName},\n\nYou've been added to Lancelot Management on the Refrigeration Tracker. Your PIN is: ${pin}\n\nUse it at the login screen.`);
   document.getElementById('newLMFirst').value=''; document.getElementById('newLMLast').value=''; document.getElementById('newLMEmail').value=''; document.getElementById('newLMPhone').value=''; document.getElementById('newLMPin').value='';
-  toast(`Added ${firstName} to Lancelot Management.`);
+  toast(!typedPin ? `Added ${firstName} to Lancelot Management — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName} to Lancelot Management.`);
 });
 
 let editingLancelotMgmtId = null;
@@ -1655,7 +1846,7 @@ async function jumpToSite(siteKey){
   currentSite = siteKey;
   sessionStorage.setItem('rt_last_site', currentSite);
   await loadSiteData(currentSite);
-  renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList();
+  renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderDailyReportsList(); renderUserWorkerList();
   toast(`Switched to ${SITES[currentSite].name}.`);
 }
 let editingSiteUserId = null;
@@ -1711,16 +1902,19 @@ document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
   const lastName = document.getElementById('newPersonLast').value.trim();
   const email = document.getElementById('newPersonEmail').value.trim();
   const phone = document.getElementById('newPersonPhone').value.trim();
-  const pin = document.getElementById('newPersonPin').value.trim();
+  const typedPin = document.getElementById('newPersonPin').value.trim();
   const role = document.getElementById('newPersonRole').value;
-  if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
+  if(!firstName){ toast('Enter at least a first name.'); return; }
+  if(typedPin && !/^\d{4,6}$/.test(typedPin)){ toast('PIN must be 4-6 digits, or leave it blank to auto-generate one.'); return; }
+  if(typedPin && isPinTakenAnywhere(typedPin)){ toast('That PIN is already in use by someone else in the system.'); return; }
+  const pin = typedPin || generateUniquePin();
   const list = siteUsersCache[currentSite] || [];
-  if(isPinTakenAnywhere(pin)){ toast('That PIN is already in use by someone else in the system.'); return; }
   list.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin, role });
   siteUsersCache[currentSite] = list;
   await persistSiteUsers();
+  if(!typedPin && email && emailReady()) sendEmailTo(email, 'Your Refrigeration Tracker PIN', `Hi ${firstName},\n\nYou've been added to the Refrigeration Tracker. Your PIN is: ${pin}\n\nUse it at the login screen.`);
   document.getElementById('newPersonFirst').value=''; document.getElementById('newPersonLast').value=''; document.getElementById('newPersonEmail').value=''; document.getElementById('newPersonPhone').value=''; document.getElementById('newPersonPin').value=''; document.getElementById('newPersonRole').value='crew';
-  toast(`Added ${firstName}.`);
+  toast(!typedPin ? `Added ${firstName} — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName}.`);
 });
 async function removeSiteUser(id){
   if(!confirm("Delete this person's access?")) return;
@@ -1770,7 +1964,8 @@ document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.
   if(restored){
     showApp(true); renderRoleControls();
     if(currentRole!=='lancelot'){
-      render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
+      render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderDailyReportsList(); renderUserWorkerList(); renderSuperadminList();
+      handleDeepLink();
     }
   } else {
     showApp(false); openLoginModal();
