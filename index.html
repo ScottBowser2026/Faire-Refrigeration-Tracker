@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Refrigeration Tracker</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <!--
   =====================================================================
   SETUP NOTES
@@ -297,6 +300,11 @@
 
     <div class="panel">
       <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Site Users <span class="hint">(F&amp;B Manager / User / Maintenance — this site only)</span></div>
+      <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+        <button class="btn btn-outline btn-small" id="exportUsersCsvBtn">Download CSV</button>
+        <button class="btn btn-outline btn-small" id="importUsersCsvBtn">Import from CSV</button>
+        <button class="btn btn-danger btn-small" id="deleteAllUsersBtn" style="display:none">Delete All Site Users</button>
+      </div>
       <div id="accessList"></div>
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
         <input type="text" id="newPersonFirst" placeholder="First name" style="flex:1; min-width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
@@ -315,6 +323,7 @@
 
     <div class="panel">
       <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Unit Assignments <span class="hint">(assign each unit to a User for daily checks)</span></div>
+      <button class="btn btn-danger btn-small" id="deleteAllUnitsBtn" style="display:none; margin-bottom:10px;">Delete All Units</button>
       <div id="unitAssignmentsList"></div>
     </div>
 
@@ -518,6 +527,29 @@
   </div>
 </div>
 
+<!-- USER CSV IMPORT -->
+<div class="overlay" id="userCsvImportOverlay">
+  <div class="modal" style="max-width:560px;">
+    <h2>Import Site Users from CSV</h2>
+    <div class="sub">Columns: FirstName,LastName,Email,Phone,Role,PIN — Role should be "User", "F&B Manager", or "Maintenance". Leave PIN blank to auto-generate.</div>
+    <div id="userCsvPasteStep">
+      <div class="field"><label>Paste CSV content, or choose a file</label>
+        <input type="file" id="user_csv_file" accept=".csv,text/csv" style="margin-bottom:8px;">
+        <textarea id="user_csv_text" rows="6" placeholder="FirstName,LastName,Email,Phone,Role,PIN&#10;Kaitlyn,Brown,kaitlyn@example.com,555-1212,User,"></textarea>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="previewUserCsvImport()">Preview Import</button>
+    </div>
+    <div id="userCsvPreviewStep" style="display:none;">
+      <div id="userCsvPreviewSummary" style="font-size:13.5px; margin-bottom:10px;"></div>
+      <div id="userCsvPreviewList" style="max-height:280px; overflow-y:auto; margin-bottom:14px;"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="backToUserCsvPaste()">Back</button>
+        <button class="btn btn-primary" onclick="confirmUserCsvImport()">Create These People</button>
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeUserCsvImportModal()">Close</button></div>
+  </div>
+</div>
 <div class="overlay" id="checkOverlay">
   <div class="modal">
     <h2 id="checkModalTitle">Log Entry</h2>
@@ -875,6 +907,8 @@ function renderRoleControls(){
     document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
+    document.getElementById('deleteAllUsersBtn').style.display = isSuperadmin() ? 'inline-block' : 'none';
+    document.getElementById('deleteAllUnitsBtn').style.display = isSuperadmin() ? 'inline-block' : 'none';
 
     document.getElementById('maintenanceWorkerView').style.display = isMaintenanceWorker() ? 'block' : 'none';
     document.getElementById('userWorkerView').style.display = isUserRole() ? 'block' : 'none';
@@ -1409,6 +1443,119 @@ function switchMainView(view){
 
   if(isAllFaires) renderAllSitesOverview();
 }
+
+// ---- Site Users: CSV export, CSV import, and protected bulk-delete ----
+function roleToCsvLabel(role){ return role==='admin' ? 'F&B Manager' : role==='maintenance' ? 'Maintenance' : 'User'; }
+function csvLabelToRole(label){
+  const l = (label||'').trim().toLowerCase();
+  if(l.includes('manager')) return 'admin';
+  if(l.includes('maint')) return 'maintenance';
+  return 'crew';
+}
+document.getElementById('exportUsersCsvBtn').addEventListener('click', ()=>{
+  const list = siteUsersCache[currentSite] || [];
+  const lines = ['FirstName,LastName,Email,Phone,Role,PIN'];
+  list.forEach(u=>{
+    lines.push([u.firstName||'', u.lastName||'', u.email||'', u.phone||'', roleToCsvLabel(u.role), u.pin||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+  });
+  const blob = new Blob([lines.join('\n')], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${currentSite}-site-users-${localDateKey()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast(`Downloaded ${list.length} user(s).`);
+});
+
+let pendingUserCsv = [];
+function openUserCsvImportModal(){
+  document.getElementById('user_csv_text').value=''; document.getElementById('user_csv_file').value='';
+  document.getElementById('userCsvPasteStep').style.display='block';
+  document.getElementById('userCsvPreviewStep').style.display='none';
+  document.getElementById('userCsvImportOverlay').classList.add('show');
+}
+function closeUserCsvImportModal(){ document.getElementById('userCsvImportOverlay').classList.remove('show'); pendingUserCsv=[]; }
+function backToUserCsvPaste(){
+  document.getElementById('userCsvPreviewStep').style.display='none';
+  document.getElementById('userCsvPasteStep').style.display='block';
+}
+function previewUserCsvImport(){
+  const text = document.getElementById('user_csv_text').value.trim();
+  if(!text){ toast('Paste CSV content or choose a file first.'); return; }
+  const rows = parseCsvSimple(text);
+  if(rows.length<2){ toast('No data rows found below the header.'); return; }
+  pendingUserCsv = [];
+  rows.slice(1).forEach(row=>{
+    const firstName = (row[0]||'').trim();
+    if(!firstName) return;
+    pendingUserCsv.push({
+      firstName, lastName:(row[1]||'').trim(), email:(row[2]||'').trim(), phone:(row[3]||'').trim(),
+      role: csvLabelToRole(row[4]), pin: (row[5]||'').trim()
+    });
+  });
+  if(pendingUserCsv.length===0){ toast('No people found in that file.'); return; }
+  document.getElementById('userCsvPasteStep').style.display='none';
+  document.getElementById('userCsvPreviewStep').style.display='block';
+  document.getElementById('userCsvPreviewSummary').textContent = `${pendingUserCsv.length} person/people will be added to ${SITES[currentSite].name}. Blank PINs get auto-generated. Check roles below before confirming.`;
+  renderUserCsvPreviewList();
+}
+function renderUserCsvPreviewList(){
+  const wrap = document.getElementById('userCsvPreviewList');
+  wrap.innerHTML = pendingUserCsv.map((p,i)=>`
+    <div style="display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); font-size:13px;">
+      <div style="flex:1;"><b>${escapeHtml(p.firstName)} ${escapeHtml(p.lastName)}</b> <span style="color:#888;">${escapeHtml(p.email||'no email')}</span></div>
+      <select onchange="pendingUserCsv[${i}].role=this.value">
+        <option value="crew" ${p.role==='crew'?'selected':''}>User</option>
+        <option value="admin" ${p.role==='admin'?'selected':''}>F&amp;B Manager</option>
+        <option value="maintenance" ${p.role==='maintenance'?'selected':''}>Maintenance</option>
+      </select>
+    </div>`).join('');
+}
+async function confirmUserCsvImport(){
+  if(!confirm(`Add ${pendingUserCsv.length} person/people to ${SITES[currentSite].name}?`)) return;
+  const list = siteUsersCache[currentSite] || [];
+  const results = [];
+  pendingUserCsv.forEach(p=>{
+    let pin = p.pin;
+    if(pin && (!/^\d{4,6}$/.test(pin) || isPinTakenAnywhere(pin))) pin = ''; // fall back to auto-gen if invalid/taken
+    if(!pin) pin = generateUniquePin();
+    list.push({ id:uid(), firstName:p.firstName, lastName:p.lastName, email:p.email||null, phone:p.phone||null, pin, role:p.role });
+    results.push({ ...p, pin });
+  });
+  siteUsersCache[currentSite] = list;
+  await persistSiteUsers();
+  toast(`${pendingUserCsv.length} people added.`);
+  closeUserCsvImportModal();
+  renderAccessList(); renderUnitAssignments();
+}
+document.getElementById('importUsersCsvBtn').addEventListener('click', openUserCsvImportModal);
+document.getElementById('user_csv_file').addEventListener('change', (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{ document.getElementById('user_csv_text').value = reader.result; };
+  reader.readAsText(file);
+});
+
+document.getElementById('deleteAllUsersBtn').addEventListener('click', async ()=>{
+  const list = siteUsersCache[currentSite] || [];
+  if(list.length===0){ toast('No Site Users to delete.'); return; }
+  if(!confirm(`Delete ALL ${list.length} Site Users at ${SITES[currentSite].name}? Superadmins and Lancelot Management are NOT affected. This cannot be undone — consider clicking "Download CSV" first as a backup.`)) return;
+  if(!confirm('Really sure? This permanently removes every F&B Manager, User, and Maintenance account at this site.')) return;
+  siteUsersCache[currentSite] = [];
+  await persistSiteUsers();
+  toast('All Site Users deleted for this site.');
+  renderAccessList(); renderUnitAssignments();
+});
+
+document.getElementById('deleteAllUnitsBtn').addEventListener('click', async ()=>{
+  if(units.length===0){ toast('No units to delete.'); return; }
+  if(!confirm(`Delete ALL ${units.length} units (and all their history, tickets, and PM tasks) at ${SITES[currentSite].name}? This cannot be undone.`)) return;
+  if(!confirm('Really sure? Every unit, every logged check, every maintenance ticket and PM task at this site will be permanently gone.')) return;
+  units = [];
+  await persistUnits();
+  toast('All units deleted for this site.');
+  render(); renderFleetChart(); renderIncidents(); renderUnitAssignments(); renderUserWorkerList(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList();
+});
 
 function usersWithRole(role){ return (siteUsersCache[currentSite]||[]).filter(u=>u.role===role); }
 function populateBoothDatalist(){
