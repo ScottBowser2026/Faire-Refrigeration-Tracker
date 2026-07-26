@@ -283,6 +283,7 @@
           <div class="field"><label>Temperature (°F)</label><input type="text" id="uc_temp" inputmode="decimal"></div>
           <div class="field"><label>Fans operating?</label><select id="uc_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
         </div>
+        <div class="field"><label>Compressor running?</label><select id="uc_compressor"><option value="true">Yes</option><option value="false">No — down</option></select></div>
       </div>
       <div id="uc_performedByWrap" style="display:none;">
         <div class="field"><label>Performed by</label><select id="uc_performedby"><option value="Staff">Staff</option><option value="Outside Service Co">Outside Service Co</option></select></div>
@@ -602,6 +603,7 @@
         <div class="field"><label>Temperature (°F)</label><input type="text" id="c_temp" inputmode="decimal"></div>
         <div class="field"><label>Fans operating?</label><select id="c_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
       </div>
+      <div class="field"><label>Compressor running?</label><select id="c_compressor"><option value="true">Yes</option><option value="false">No — down</option></select></div>
     </div>
     <div id="performedByWrap" style="display:none">
       <div class="field"><label>Performed by</label>
@@ -887,6 +889,7 @@ function statusOf(u){
   if(isMarkedOffToday(u)) return "off";
   if(u.currentTemp===null||u.currentTemp===undefined||u.fansOperating===null||u.fansOperating===undefined) return "unset";
   if(u.fansOperating===false) return "flag";
+  if(u.compressorOperating===false) return "flag";
   if(u.currentTemp<u.tmin||u.currentTemp>u.tmax) return "flag";
   return "ok";
 }
@@ -897,7 +900,7 @@ function dayComplianceMap(u){
   const map = {};
   (u.history||[]).filter(h=>!h.entryType||h.entryType==='check').forEach(h=>{
     const key = new Date(h.at).toISOString().slice(0,10);
-    const bad = (h.fans===false)||(h.temp<u.tmin||h.temp>u.tmax);
+    const bad = (h.fans===false)||(h.compressor===false)||(h.temp<u.tmin||h.temp>u.tmax);
     if(!(key in map)) map[key]=!bad; else if(bad) map[key]=false;
   });
   return map;
@@ -1141,9 +1144,9 @@ function render(){
       assignHtml = `<div class="card-last">${assignedNames.length?`Assigned to: ${assignedNames.map(n=>escapeHtml(n)).join(', ')}`:'Unassigned'}</div>`;
     }
     return `<div class="card">
-      <div class="card-top"><div><div class="card-name">${escapeHtml(u.name)}</div><div class="card-loc">${escapeHtml(u.location||'')}</div></div>
+      <div class="card-top"><div><div class="card-name">${escapeHtml(unitGroupKey(u))}</div><div class="card-loc">${escapeHtml(u.name)}</div></div>
       <span class="status-badge ${badgeClass}">${badgeLabel}</span></div>
-      <div class="card-reading"><span><b>${u.currentTemp!=null?u.currentTemp+'°F':'—'}</b></span><span>fans ${u.fansOperating===true?'ok':u.fansOperating===false?'DOWN':'—'}</span></div>
+      <div class="card-reading"><span><b>${u.currentTemp!=null?u.currentTemp+'°F':'—'}</b></span><span>fans ${u.fansOperating===true?'ok':u.fansOperating===false?'DOWN':'—'}</span><span>compressor ${u.compressorOperating===true?'ok':u.compressorOperating===false?'DOWN':'—'}</span></div>
       ${compHtml}
       ${ticketBadgeHtml}
       ${pmBadgeHtml}
@@ -1344,6 +1347,7 @@ function setUcDefaults(){
   document.getElementById('uc_type').value = 'check';
   document.getElementById('uc_temp').value = '';
   document.getElementById('uc_fans').value = 'true';
+  document.getElementById('uc_compressor').value = 'true';
   document.getElementById('uc_performedby').value = 'Staff';
   document.getElementById('uc_photo').value = '';
   document.getElementById('uc_notes').value = '';
@@ -1367,9 +1371,10 @@ async function submitUserCheck(){
     const temp = parseFloat(document.getElementById('uc_temp').value);
     if(isNaN(temp)){ msg.style.color='var(--flag)'; msg.textContent='Enter a temperature.'; return; }
     const fans = document.getElementById('uc_fans').value==='true';
-    u.currentTemp=temp; u.fansOperating=fans; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
+    const compressor = document.getElementById('uc_compressor').value==='true';
+    u.currentTemp=temp; u.fansOperating=fans; u.compressorOperating=compressor; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
     if(!u.history) u.history=[];
-    u.history.push({ at:u.lastCheckAt, temp, fans, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
+    u.history.push({ at:u.lastCheckAt, temp, fans, compressor, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
   } else if(type==='off'){
     if(!confirm(`Confirm: mark "${u.name}" as OFF for today? It won't need a compliance check until tomorrow.`)) return;
     const offAt = new Date().toISOString();
@@ -1650,7 +1655,7 @@ function renderUnitAssignments(){
   const sorted = units.slice().sort((a,b)=>{
     const aUn = !(a.assignedUserIds&&a.assignedUserIds.length), bUn = !(b.assignedUserIds&&b.assignedUserIds.length);
     if(aUn!==bUn) return aUn ? -1 : 1; // unassigned units float to the top
-    return a.name.localeCompare(b.name);
+    return unitGroupKey(a).localeCompare(unitGroupKey(b)) || a.name.localeCompare(b.name);
   });
   wrap.innerHTML = sorted.map(u=>{
     const ids = u.assignedUserIds||[];
@@ -1659,8 +1664,8 @@ function renderUnitAssignments(){
     const chips = ids.map((id,i)=>`<span class="assign-chip">${escapeHtml(names[i]||'?')}<button onclick="removeUserFromUnit('${u.id}','${id}')" title="Remove">&times;</button></span>`).join('');
     return `<div class="assign-row ${ids.length===0?'unassigned':''}" style="flex-direction:column; align-items:stretch; gap:6px;">
       <div>
-        <b>${escapeHtml(u.name)}</b>
-        <span style="color:#888; font-size:12px;"> (${escapeHtml(u.location||'')})</span>
+        <b>${escapeHtml(unitGroupKey(u))}</b>
+        <span style="color:#888; font-size:12px;"> — ${escapeHtml(u.name)}</span>
         ${ids.length===0?'<span style="color:var(--flag); font-size:11.5px; margin-left:6px;">UNASSIGNED</span>':''}
       </div>
       <div class="card-assign-chips">${chips || '<span style="color:#888; font-size:11.5px;">No one assigned yet</span>'}</div>
@@ -1769,7 +1774,7 @@ async function confirmCsvImport(){
   if(!confirm(`Create ${pendingCsvUnits.length} new unit(s) at ${SITES[currentSite].name}? This can't be undone in bulk — you'd delete them one at a time if needed.`)) return;
   pendingCsvUnits.forEach(u=>{
     units.push({ id:uid(), name:u.name, type:u.type, runtime:'always', booth:u.booth, location:u.booth, stock:'',
-      tmin:33, tmax:40, assignedUserIds:[], assignedUserNames:[], currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] });
+      tmin:33, tmax:40, assignedUserIds:[], assignedUserNames:[], currentTemp:null, fansOperating:null, compressorOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] });
   });
   await persistUnits();
   toast(`${pendingCsvUnits.length} units created.`);
@@ -1821,7 +1826,7 @@ async function saveUnit(){
     booth:document.getElementById('u_booth').value.trim(), location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
     tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
   if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); Object.assign(u,data); }
-  else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
+  else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, compressorOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
   await persistUnits(); closeUnitModal(); render(); renderFleetChart(); renderUserWorkerList(); renderUnitAssignments(); toast('Saved.');
 }
 document.getElementById('deleteUnitBtn').addEventListener('click', async ()=>{
@@ -1838,6 +1843,7 @@ function openCheckModal(unitId){
   document.getElementById('c_type').value='check';
   document.getElementById('c_temp').value = u.currentTemp!=null?u.currentTemp:'';
   document.getElementById('c_fans').value = u.fansOperating===false?'false':'true';
+  document.getElementById('c_compressor').value = u.compressorOperating===false?'false':'true';
   document.getElementById('c_notes').value=''; document.getElementById('c_photo').value='';
   document.getElementById('c_performedby').value='Staff';
   updateTempFieldsVisibility();
@@ -1862,9 +1868,10 @@ async function saveCheck(){
     const temp = parseFloat(document.getElementById('c_temp').value);
     if(isNaN(temp)){ toast('Enter a temperature.'); return; }
     const fans = document.getElementById('c_fans').value==='true';
-    u.currentTemp=temp; u.fansOperating=fans; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
+    const compressor = document.getElementById('c_compressor').value==='true';
+    u.currentTemp=temp; u.fansOperating=fans; u.compressorOperating=compressor; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
     if(!u.history) u.history=[];
-    u.history.push({ at:u.lastCheckAt, temp, fans, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
+    u.history.push({ at:u.lastCheckAt, temp, fans, compressor, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
   } else if(type==='off'){
     if(!confirm(`Confirm: mark "${u.name}" as OFF for today? It won't need a compliance check until tomorrow.`)) return;
     const offAt = new Date().toISOString();
@@ -1923,8 +1930,8 @@ function renderHistoryBody(){
       ${g.entries.map(h=>{
         const type=h.entryType||'check'; const badgeClass='entry-'+type;
         const outOfRange = type==='check' && (h.temp<u.tmin||h.temp>u.tmax);
-        const bad = outOfRange || h.fans===false;
-        const readingHtml = type==='check' ? `<span style="color:${bad?'var(--flag)':'var(--ink)'}; font-weight:600;">${h.temp}°F</span>&nbsp;<span style="color:${h.fans===false?'var(--flag)':'#888'};">fans ${h.fans?'ok':'DOWN'}</span>` : '';
+        const bad = outOfRange || h.fans===false || h.compressor===false;
+        const readingHtml = type==='check' ? `<span style="color:${bad?'var(--flag)':'var(--ink)'}; font-weight:600;">${h.temp}°F</span>&nbsp;<span style="color:${h.fans===false?'var(--flag)':'#888'};">fans ${h.fans?'ok':'DOWN'}</span>&nbsp;<span style="color:${h.compressor===false?'var(--flag)':'#888'};">compressor ${h.compressor?'ok':'DOWN'}</span>` : '';
         const performedByHtml = (type==='repair' && h.performedBy) ? `<span class="entry-badge" style="background:var(--unset-bg); color:#555;">${escapeHtml(h.performedBy)}</span>&nbsp;` : '';
         return `<div style="display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--border);">
           <div style="flex:1; font-size:13.5px;">
@@ -1973,7 +1980,7 @@ async function emailNotCheckedReport(){
   if(ok){ toast('Report sent.'); closeReportModal(); }
 }
 function complianceReasons(u){
-  const reasons=[]; if(u.fansOperating===false) reasons.push('fans down');
+  const reasons=[]; if(u.fansOperating===false) reasons.push('fans down'); if(u.compressorOperating===false) reasons.push('compressor down');
   if(u.currentTemp!=null && (u.currentTemp<u.tmin||u.currentTemp>u.tmax)) reasons.push(`${u.currentTemp}°F (target ${u.tmin}-${u.tmax}°F)`);
   return reasons;
 }
@@ -2089,10 +2096,14 @@ function buildIncidents(){
     const checks=(u.history||[]).filter(h=>!h.entryType||h.entryType==='check').slice().sort((a,b)=>new Date(a.at)-new Date(b.at));
     let prevBad=false;
     checks.forEach((h,i)=>{
-      const bad=(h.fans===false)||(h.temp<u.tmin||h.temp>u.tmax);
+      const bad=(h.fans===false)||(h.compressor===false)||(h.temp<u.tmin||h.temp>u.tmax);
       if(bad && !prevBad){
-        const later = checks.slice(i+1).find(h2=>!((h2.fans===false)||(h2.temp<u.tmin||h2.temp>u.tmax)));
-        incidents.push({ unit:u.name, location:u.location, at:h.at, reason:(h.fans===false?'fans down':'')+((h.temp<u.tmin||h.temp>u.tmax)?` ${h.temp}°F (target ${u.tmin}-${u.tmax}°F)`:''), resolvedAt: later?later.at:null });
+        const later = checks.slice(i+1).find(h2=>!((h2.fans===false)||(h2.compressor===false)||(h2.temp<u.tmin||h2.temp>u.tmax)));
+        const reasonParts = [];
+        if(h.fans===false) reasonParts.push('fans down');
+        if(h.compressor===false) reasonParts.push('compressor down');
+        if(h.temp<u.tmin||h.temp>u.tmax) reasonParts.push(`${h.temp}°F (target ${u.tmin}-${u.tmax}°F)`);
+        incidents.push({ unit:u.name, location:u.location, at:h.at, reason:reasonParts.join(', '), resolvedAt: later?later.at:null });
       }
       prevBad=bad;
     });
