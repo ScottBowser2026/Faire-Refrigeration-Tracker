@@ -250,7 +250,7 @@
   <!-- USER CHECKLIST VIEW (User/crew role only — replaces the dashboard above) -->
   <div id="userWorkerView" style="display:none">
     <div class="section-head"><h2>My Units to Check</h2><span class="hint">Assigned to you · resets each day as you log checks</span></div>
-    <div class="panel" id="userWorkerList"></div>
+    <div id="userWorkerList"></div>
   </div>
 
   <!-- MAINTENANCE TICKETS OVERVIEW (F&B Manager / Superadmin only) -->
@@ -1189,6 +1189,11 @@ function renderMaintenanceWorkerList(){
     </div>`).join('');
 }
 
+let openUserGroups = new Set();
+function toggleUserGroup(key){
+  if(openUserGroups.has(key)) openUserGroups.delete(key); else openUserGroups.add(key);
+  renderUserWorkerList();
+}
 function renderUserWorkerList(){
   const wrap = document.getElementById('userWorkerList'); if(!wrap) return;
   if(!isUserRole()) return;
@@ -1197,12 +1202,36 @@ function renderUserWorkerList(){
     wrap.innerHTML = `<div style="color:#888; font-size:13.5px;">${units.some(u=>(u.assignedUserIds||[]).includes(currentUserId)) ? "All your assigned units are checked for today — nice work!" : "No units are assigned to you yet — ask your F&B Manager."}</div>`;
     return;
   }
-  const sorted = myUnits.slice().sort((a,b)=>a.name.localeCompare(b.name));
-  wrap.innerHTML = sorted.map(u=>`
-    <div class="checklist-row">
-      <div><span class="name">${escapeHtml(u.name)}</span><span class="loc">${escapeHtml(u.location||'')}</span></div>
-      <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log Check</button>
-    </div>`).join('');
+  const groups = {};
+  myUnits.forEach(u=>{
+    const key = (u.location||'').trim() || 'Ungrouped';
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(u);
+  });
+  const groupKeys = Object.keys(groups).sort((a,b)=>a.localeCompare(b));
+  wrap.innerHTML = groupKeys.map(key=>{
+    const list = groups[key].slice().sort((a,b)=>a.name.localeCompare(b.name));
+    const isOpen = openUserGroups.has(key);
+    const rows = list.map(u=>{
+      const comp = complianceStats(u);
+      const streakText = comp.streakGood===null ? 'no history yet' : `${comp.streakDays} day${comp.streakDays===1?'':'s'} ${comp.streakGood?'in':'out of'} compliance`;
+      const readingText = u.currentTemp!=null ? `${u.currentTemp}°F · fans ${u.fansOperating?'ok':'DOWN'}` : 'never checked';
+      return `<div class="checklist-row">
+        <div>
+          <span class="name">${escapeHtml(u.name)}</span>
+          <div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:2px;">${readingText} · ${streakText}</div>
+        </div>
+        <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log Check</button>
+      </div>`;
+    }).join('');
+    return `<div class="panel" style="margin-bottom:8px; padding:0; overflow:hidden;">
+      <button onclick="toggleUserGroup('${key.replace(/'/g,"\\'")}')" style="width:100%; text-align:left; background:var(--paper); border:none; padding:10px 14px; font-weight:700; font-size:13.5px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+        <span>${escapeHtml(key)} <span style="color:#888; font-weight:400; font-size:12px;">(${list.length})</span></span>
+        <span style="color:#888;">${isOpen?'▾':'▸'}</span>
+      </button>
+      ${isOpen ? `<div style="max-height:340px; overflow-y:auto; padding:0 14px;">${rows}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function renderMaintenanceTicketsOverview(){
