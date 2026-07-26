@@ -1,4 +1,4 @@
-## Refrigeration Tracker
+# Refrigeration Tracker
 
 Live at: https://refrigeration.lancelotbiz.com/
 
@@ -88,7 +88,8 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 
 ## Unit assignment & the User checklist
 
-- F&B Manager assigns each unit to a specific **User** (via the unit's Edit form — same pattern as QC Tracker's zone-manager-per-booth)
+- **Unit Assignments panel** (Admin Panel tab) — every unit at the site in one list, each with its own dropdown to assign/reassign a User. Unassigned units float to the top and are flagged in red, so gaps are easy to spot at a glance.
+- Assignment can also be set from an individual unit's Edit form, if preferred
 - Users no longer see the full unit grid — logging in shows **"My Units to Check"**, a scrolling list of only their assigned units that haven't been checked yet today
 - As soon as a User logs a routine check, that unit disappears from their list — it resets automatically the next calendar day
 - F&B Manager/Superadmin still see every unit in the normal grid, with an "Assigned to: [name]" line on each card
