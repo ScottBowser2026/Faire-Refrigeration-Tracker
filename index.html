@@ -110,6 +110,11 @@
   .assign-row{ display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:13.5px; }
   .assign-row.unassigned{ background:rgba(164,64,47,.06); }
   .assign-row select{ flex-shrink:0; min-width:160px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; }
+  .card-assign-chips{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+  .assign-chip{ display:inline-flex; align-items:center; gap:4px; background:var(--unset-bg); border-radius:20px; padding:3px 4px 3px 9px; font-size:11.5px; }
+  .assign-chip button{ background:none; border:none; color:#888; font-size:13px; line-height:1; padding:2px 5px; cursor:pointer; border-radius:50%; }
+  .assign-chip button:hover{ background:var(--flag-bg); color:var(--flag); }
+  .card-assign select{ width:100%; padding:5px 7px; border:1px solid var(--border); border-radius:6px; font-size:12px; }
   .alert-row:last-child{ border-bottom:none; }
   .alert-row .meta{ font-family:var(--mono); font-size:11px; color:#888; }
   .alert-resolved{ font-family:var(--mono); font-size:10.5px; padding:2px 7px; border-radius:5px; background:var(--ok-bg); color:var(--ok); white-space:nowrap; }
@@ -1009,6 +1014,22 @@ function render(){
     const duePmTasks = (u.pmTasks||[]).filter(t=>pmDueInfo(t).isDue);
     const pmBadgeHtml = duePmTasks.length>0 ? `<div class="card-compliance bad">🗓️ ${duePmTasks.length} PM task${duePmTasks.length===1?'':'s'} due</div>` : '';
     const pmBtnHtml = isSiteAdmin() ? `<button class="btn btn-outline btn-small" onclick="openPmModal('${u.id}')">PM Tasks${duePmTasks.length>0?' ('+duePmTasks.length+')':''}</button>` : '';
+    const assignedIds = u.assignedUserIds||[];
+    const assignedNames = u.assignedUserNames||[];
+    let assignHtml;
+    if(isSiteAdmin()){
+      const availableUsers = usersWithRole('crew').filter(usr=>!assignedIds.includes(usr.id));
+      const chips = assignedIds.map((id,i)=>`<span class="assign-chip">${escapeHtml(assignedNames[i]||'?')}<button onclick="removeUserFromUnit('${u.id}','${id}')" title="Remove">&times;</button></span>`).join('');
+      assignHtml = `<div class="card-assign">
+        <div class="card-assign-chips">${chips || '<span style="color:#888; font-size:11.5px;">Unassigned</span>'}</div>
+        ${availableUsers.length ? `<select onchange="if(this.value){ addUserToUnit('${u.id}', this.value); this.value=''; }">
+          <option value="">+ Add person…</option>
+          ${availableUsers.map(usr=>`<option value="${usr.id}">${escapeHtml(fullName(usr))}</option>`).join('')}
+        </select>` : ''}
+      </div>`;
+    } else {
+      assignHtml = `<div class="card-last">${assignedNames.length?`Assigned to: ${assignedNames.map(n=>escapeHtml(n)).join(', ')}`:'Unassigned'}</div>`;
+    }
     return `<div class="card">
       <div class="card-top"><div><div class="card-name">${escapeHtml(u.name)}</div><div class="card-loc">${escapeHtml(u.location||'')}</div></div>
       <span class="status-badge ${badgeClass}">${badgeLabel}</span></div>
@@ -1017,7 +1038,7 @@ function render(){
       ${ticketBadgeHtml}
       ${pmBadgeHtml}
       <div class="card-last">${neverChecked(u)?'Never checked':`Last: ${fmtDate(u.lastCheckAt)} · ${escapeHtml(u.lastCheckBy||'')}`}</div>
-      <div class="card-last">${(u.assignedUserNames&&u.assignedUserNames.length)?`Assigned to: ${u.assignedUserNames.map(n=>escapeHtml(n)).join(', ')}`:'Unassigned'}</div>
+      ${assignHtml}
       <div class="card-actions">
         <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log entry</button>
         <button class="btn btn-outline btn-small" onclick="openHistoryModal('${u.id}')">History</button>
@@ -1341,6 +1362,23 @@ function renderUnitAssignments(){
       </select>
     </div>`;
   }).join('');
+}
+async function addUserToUnit(unitId, userId){
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  const user = usersWithRole('crew').find(x=>x.id===userId); if(!user) return;
+  if(!u.assignedUserIds) u.assignedUserIds=[]; if(!u.assignedUserNames) u.assignedUserNames=[];
+  if(u.assignedUserIds.includes(userId)) return;
+  u.assignedUserIds.push(userId); u.assignedUserNames.push(fullName(user));
+  await persistUnits(); render(); renderUnitAssignments(); renderUserWorkerList();
+  toast(`${fullName(user)} added to ${u.name}.`);
+}
+async function removeUserFromUnit(unitId, userId){
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  const idx = (u.assignedUserIds||[]).indexOf(userId); if(idx===-1) return;
+  const removedName = (u.assignedUserNames||[])[idx];
+  u.assignedUserIds.splice(idx,1); u.assignedUserNames.splice(idx,1);
+  await persistUnits(); render(); renderUnitAssignments(); renderUserWorkerList();
+  toast(`${removedName||'Person'} removed from ${u.name}.`);
 }
 async function updateUnitAssignment(unitId, userIds){
   const u = units.find(x=>x.id===unitId); if(!u) return;
