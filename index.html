@@ -177,6 +177,11 @@
 
 <main id="appMain" style="display:none">
 
+  <div id="dashboardAdminNav" style="display:none; gap:8px; margin-bottom:20px;">
+    <button class="btn btn-outline" id="navDashboardBtn" onclick="switchMainView('dashboard')">Dashboard</button>
+    <button class="btn btn-outline" id="navAdminBtn" onclick="switchMainView('admin')">Admin Panel</button>
+  </div>
+
   <div id="normalDashboardWrap">
 
   <div class="section-head"><h2>Fleet Compliance — last 14 days</h2><span class="hint">% of units in range each day</span></div>
@@ -231,16 +236,12 @@
   <div id="accessPanelWrap" style="display:none">
     <div class="section-head"><h2>Manage Access</h2><span class="hint" id="accessSiteHint"></span></div>
 
-    <div class="panel" id="allSitesOverviewPanel" style="display:none">
-      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">All Sites — Who's Where <span class="hint">(Superadmin overview, read-only)</span></div>
-      <div id="allSitesOverviewList"></div>
-    </div>
-
     <div class="panel" id="superadminPanel" style="display:none">
       <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Superadmins <span class="hint">(access to all sites)</span></div>
       <div id="superadminList"></div>
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-        <input type="text" id="newSAName" placeholder="Name" style="flex:1; min-width:110px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newSAFirst" placeholder="First name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newSALast" placeholder="Last name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newSAEmail" placeholder="Email" style="flex:1; min-width:150px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newSAPhone" placeholder="Phone" style="flex:1; min-width:130px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newSAPin" placeholder="PIN" style="width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
@@ -248,11 +249,17 @@
       </div>
     </div>
 
+    <div class="panel" id="allSitesOverviewPanel" style="display:none">
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">All Sites — Who's Where <span class="hint">(Superadmin overview, read-only)</span></div>
+      <div id="allSitesOverviewList"></div>
+    </div>
+
     <div class="panel">
-      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Site Users <span class="hint">(F&amp;B Manager / User — this site only)</span></div>
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Site Users <span class="hint">(F&amp;B Manager / User / Maintenance — this site only)</span></div>
       <div id="accessList"></div>
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-        <input type="text" id="newPersonName" placeholder="Name" style="flex:1; min-width:100px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newPersonFirst" placeholder="First name" style="flex:1; min-width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+        <input type="text" id="newPersonLast" placeholder="Last name" style="flex:1; min-width:90px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonEmail" placeholder="Email" style="flex:1; min-width:140px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonPhone" placeholder="Phone" style="flex:1; min-width:120px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonPin" placeholder="PIN" style="width:80px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
@@ -532,6 +539,7 @@ let currentUser = "";
 let currentUserId = null;
 let currentRole = null;       // 'superadmin' | 'admin' | 'crew'
 let currentSite = null;       // siteKey the app is currently viewing
+let currentMainView = 'dashboard'; // 'dashboard' | 'admin' — for F&B Manager/Superadmin tab toggle
 let editingUnitId = null;
 let checkingUnitId = null;
 let fleetChart = null;
@@ -540,6 +548,16 @@ let recipientsListenerRef = null;
 let usersListenerRef = null;
 
 function uid(){ return 'u_' + Math.random().toString(36).slice(2,10); }
+function fullName(p){ return `${p.firstName||''} ${p.lastName||''}`.trim() || p.name || '(no name)'; }
+function migratePersonRecord(p){
+  // Old records only had a single combined "name" field — split it once, best-effort.
+  if(!p.firstName && !p.lastName && p.name){
+    const parts = p.name.trim().split(/\s+/);
+    p.firstName = parts[0] || '';
+    p.lastName = parts.slice(1).join(' ') || '';
+  }
+  return p;
+}
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
 function isSuperadmin(){ return currentRole==='superadmin'; }
@@ -577,22 +595,31 @@ async function migrateOldDataIfNeeded(){
 
 async function loadSuperadmins(){
   const snap = await refSuperadmins.once('value');
-  superadmins = snap.exists() ? objToArray(snap.val()) : [
-    { id: uid(), name:'Scott', email:null, phone:null, pin:'1905' },
-    { id: uid(), name:'Daniel', email:null, phone:null, pin:'2026' }
+  let needsPersist = !snap.exists();
+  superadmins = snap.exists() ? objToArray(snap.val()).map(p=>{
+    if(!p.firstName && !p.lastName && p.name) needsPersist = true;
+    return migratePersonRecord(p);
+  }) : [
+    { id: uid(), firstName:'Scott', lastName:'', email:null, phone:null, pin:'1905' },
+    { id: uid(), firstName:'Daniel', lastName:'', email:null, phone:null, pin:'2026' }
   ];
-  if(!snap.exists()) await refSuperadmins.set(arrayToObj(superadmins));
-  refSuperadmins.on('value', s=>{ superadmins = s.exists()?objToArray(s.val()):[]; renderSuperadminList(); });
+  if(needsPersist) await refSuperadmins.set(arrayToObj(superadmins));
+  refSuperadmins.on('value', s=>{ superadmins = s.exists()?objToArray(s.val()).map(migratePersonRecord):[]; renderSuperadminList(); });
 }
 
 async function loadAllSiteUsersForLogin(){
   for(const key of SITE_ORDER){
     const initialSnap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
-    siteUsersCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()) : [];
+    let needsPersist = false;
+    siteUsersCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()).map(p=>{
+      if(!p.firstName && !p.lastName && p.name) needsPersist = true;
+      return migratePersonRecord(p);
+    }) : [];
+    if(needsPersist) await db.ref('refrigeration/sites/'+key+'/users').set(arrayToObj(siteUsersCache[key]));
   }
   for(const key of SITE_ORDER){
     db.ref('refrigeration/sites/'+key+'/users').on('value', snap=>{
-      siteUsersCache[key] = snap.exists() ? objToArray(snap.val()) : [];
+      siteUsersCache[key] = snap.exists() ? objToArray(snap.val()).map(migratePersonRecord) : [];
       renderAllSitesOverview();
       if(key===currentSite) renderAccessList();
     });
@@ -686,15 +713,19 @@ function renderRoleControls(){
         toast(`Switched to ${SITES[currentSite].name}.`);
       });
     }
-    document.getElementById('accessPanelWrap').style.display = isSiteAdmin() ? 'block' : 'none';
-    document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('accessSiteHint').textContent = SITES[currentSite] ? `Viewing: ${SITES[currentSite].name}` : '';
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
     document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
+    document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
 
-    document.getElementById('normalDashboardWrap').style.display = isMaintenanceWorker() ? 'none' : 'block';
     document.getElementById('maintenanceWorkerView').style.display = isMaintenanceWorker() ? 'block' : 'none';
-    document.getElementById('maintenanceTicketsOverviewWrap').style.display = isSiteAdmin() ? 'block' : 'none';
+    document.getElementById('dashboardAdminNav').style.display = isSiteAdmin() ? 'flex' : 'none';
+    if(isSiteAdmin()) switchMainView(currentMainView);
+    else {
+      document.getElementById('normalDashboardWrap').style.display = isMaintenanceWorker() ? 'none' : 'block';
+      document.getElementById('maintenanceTicketsOverviewWrap').style.display = 'none';
+      document.getElementById('accessPanelWrap').style.display = 'none';
+    }
   } else {
     whoBox.innerHTML = `<button class="btn who-btn btn-small" id="loginBtn">Log In</button>`;
     document.getElementById('loginBtn').addEventListener('click', openLoginModal);
@@ -717,13 +748,13 @@ async function submitLogin(){
   const pin = document.getElementById('login_pin').value.trim();
   const match = findLoginMatch(pin);
   if(!match){ document.getElementById('loginError').textContent="Incorrect PIN."; return; }
-  currentUser = match.user.name; currentUserId = match.user.id; currentRole = match.role;
+  currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
   currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
   sessionStorage.setItem('rt_session_pin', pin);
   closeLoginModal();
   await loadSiteData(currentSite);
   showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
-  toast(`Logged in as ${match.user.name} (${SITES[currentSite].name}).`);
+  toast(`Logged in as ${fullName(match.user)} (${SITES[currentSite].name}).`);
 }
 document.getElementById('login_pin').addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
 
@@ -732,7 +763,7 @@ async function restoreSession(){
   if(!pin) return false;
   const match = findLoginMatch(pin);
   if(!match) return false;
-  currentUser = match.user.name; currentUserId = match.user.id; currentRole = match.role;
+  currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
   currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
   await loadSiteData(currentSite);
   return true;
@@ -783,7 +814,7 @@ async function sendForgotPin(){
   if(found.scope==='superadmin') await persistSuperadmins();
   else await siteRef('users', found.siteKey).set(arrayToObj(siteUsersCache[found.siteKey]));
 
-  const sent = await sendEmailTo(found.record.email, "Your Refrigeration Tracker PIN", `Hi ${found.record.name},\n\nYour new PIN is: ${newPin}\n\n(You requested this from the login screen.)`);
+  const sent = await sendEmailTo(found.record.email, "Your Refrigeration Tracker PIN", `Hi ${fullName(found.record)},\n\nYour new PIN is: ${newPin}\n\n(You requested this from the login screen.)`);
   msg.style.color = sent ? '#888' : 'var(--flag)';
   msg.textContent = sent ? genericMsg : "Something went wrong sending the email — try again.";
 }
@@ -1062,6 +1093,18 @@ async function quickCompletePm(unitId, taskId){
   await persistUnits(); render(); renderMaintenanceWorkerList(); toast('PM task marked done.');
 }
 
+function switchMainView(view){
+  currentMainView = view;
+  const isDash = view==='dashboard';
+  document.getElementById('normalDashboardWrap').style.display = isDash ? 'block' : 'none';
+  document.getElementById('maintenanceTicketsOverviewWrap').style.display = isDash ? 'block' : 'none';
+  document.getElementById('accessPanelWrap').style.display = isDash ? 'none' : 'block';
+  document.getElementById('navDashboardBtn').style.background = isDash ? 'var(--frost-deep)' : 'var(--card)';
+  document.getElementById('navDashboardBtn').style.color = isDash ? '#fff' : 'var(--ink)';
+  document.getElementById('navAdminBtn').style.background = isDash ? 'var(--card)' : 'var(--frost-deep)';
+  document.getElementById('navAdminBtn').style.color = isDash ? 'var(--ink)' : '#fff';
+}
+
 function openAddModal(){
   editingUnitId=null;
   document.getElementById('unitModalTitle').textContent='Add Unit';
@@ -1330,13 +1373,15 @@ document.getElementById('viewAllIncidentsBtn').addEventListener('click', openInc
 function renderSuperadminList(){
   const wrap = document.getElementById('superadminList'); if(!wrap) return;
   if(!isSuperadmin()){ wrap.innerHTML=''; return; }
+  const isLastOne = superadmins.length<=1;
   wrap.innerHTML = superadmins.map(u=>`
     <div class="access-row">
-      <input class="name-col" value="${escapeHtml(u.name)}" onchange="updateSuperadminField('${u.id}','name',this.value)">
+      <input class="name-col" style="flex:1 1 90px;" value="${escapeHtml(u.firstName||'')}" placeholder="First" onchange="updateSuperadminField('${u.id}','firstName',this.value)">
+      <input class="name-col" style="flex:1 1 90px;" value="${escapeHtml(u.lastName||'')}" placeholder="Last" onchange="updateSuperadminField('${u.id}','lastName',this.value)">
       <input class="email-col" value="${escapeHtml(u.email||'')}" placeholder="email" onchange="updateSuperadminField('${u.id}','email',this.value)">
       <input class="phone-col" value="${escapeHtml(u.phone||'')}" placeholder="phone" onchange="updateSuperadminField('${u.id}','phone',this.value)">
       <input class="pin-col" value="${escapeHtml(String(u.pin))}" onchange="updateSuperadminField('${u.id}','pin',this.value)">
-      <button class="btn btn-outline btn-small" onclick="removeSuperadmin('${u.id}')">Remove</button>
+      <button class="btn btn-outline btn-small" onclick="removeSuperadmin('${u.id}')" ${isLastOne?'disabled title="Add another Superadmin before removing this one"':''}>Remove</button>
     </div>`).join('');
 }
 async function updateSuperadminField(id, field, value){
@@ -1351,15 +1396,16 @@ async function removeSuperadmin(id){
   await persistSuperadmins(); toast('Removed.');
 }
 document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>{
-  const name = document.getElementById('newSAName').value.trim();
+  const firstName = document.getElementById('newSAFirst').value.trim();
+  const lastName = document.getElementById('newSALast').value.trim();
   const email = document.getElementById('newSAEmail').value.trim();
   const phone = document.getElementById('newSAPhone').value.trim();
   const pin = document.getElementById('newSAPin').value.trim();
-  if(!name || !/^\d{4,6}$/.test(pin)){ toast('Enter a name and a 4-6 digit PIN.'); return; }
+  if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
   if(superadmins.some(u=>String(u.pin)===pin)){ toast('That PIN is already taken by another Superadmin.'); return; }
-  superadmins.push({ id:uid(), name, email:email||null, phone:phone||null, pin });
+  superadmins.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
   await persistSuperadmins();
-  document.getElementById('newSAName').value=''; document.getElementById('newSAEmail').value=''; document.getElementById('newSAPhone').value=''; document.getElementById('newSAPin').value='';
+  document.getElementById('newSAFirst').value=''; document.getElementById('newSALast').value=''; document.getElementById('newSAEmail').value=''; document.getElementById('newSAPhone').value=''; document.getElementById('newSAPin').value='';
   toast(`Added ${name} as Superadmin.`);
 });
 
@@ -1377,12 +1423,12 @@ function renderAllSitesOverview(){
     });
   });
   if(rows.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13px; padding:6px 0;">No Site Users added anywhere yet.</div>`; return; }
-  rows.sort((a,b)=> SITE_ORDER.indexOf(a.siteKey)-SITE_ORDER.indexOf(b.siteKey) || a.name.localeCompare(b.name));
+  rows.sort((a,b)=> SITE_ORDER.indexOf(a.siteKey)-SITE_ORDER.indexOf(b.siteKey) || fullName(a).localeCompare(fullName(b)));
   wrap.innerHTML = rows.map(u=>`
     <div class="access-row">
       <span class="site-tag">${SITES[u.siteKey].name.split(' (')[1]?.replace(')','') || u.siteKey.toUpperCase()}</span>
       <span class="role-pill ${roleClass(u.role)}" style="flex-shrink:0;">${roleLabel(u.role)}</span>
-      <b>${escapeHtml(u.name)}</b>
+      <b>${escapeHtml(fullName(u))}</b>
       <span style="color:#888; font-size:12px;">${escapeHtml(u.email||'no email')}${u.phone?' · '+escapeHtml(u.phone):''}</span>
       <span style="flex:1;"></span>
       <button class="btn btn-outline btn-small" onclick="jumpToSite('${u.siteKey}')">Switch to this site</button>
@@ -1402,7 +1448,8 @@ function renderAccessList(){
   wrap.innerHTML = list.map(u=>`
     <div class="access-row">
       <span class="role-pill ${roleClass(u.role)}" style="flex-shrink:0;">${roleLabel(u.role)}</span>
-      <input class="name-col" value="${escapeHtml(u.name)}" onchange="updateSiteUserField('${u.id}','name',this.value)">
+      <input class="name-col" style="flex:1 1 80px;" value="${escapeHtml(u.firstName||'')}" placeholder="First" onchange="updateSiteUserField('${u.id}','firstName',this.value)">
+      <input class="name-col" style="flex:1 1 80px;" value="${escapeHtml(u.lastName||'')}" placeholder="Last" onchange="updateSiteUserField('${u.id}','lastName',this.value)">
       <input class="email-col" value="${escapeHtml(u.email||'')}" placeholder="email" onchange="updateSiteUserField('${u.id}','email',this.value)">
       <input class="phone-col" value="${escapeHtml(u.phone||'')}" placeholder="phone" onchange="updateSiteUserField('${u.id}','phone',this.value)">
       <input class="pin-col" value="${escapeHtml(String(u.pin))}" onchange="updateSiteUserField('${u.id}','pin',this.value)">
@@ -1416,19 +1463,20 @@ async function updateSiteUserField(id, field, value){
   await persistSiteUsers(); toast('Saved.');
 }
 document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
-  const name = document.getElementById('newPersonName').value.trim();
+  const firstName = document.getElementById('newPersonFirst').value.trim();
+  const lastName = document.getElementById('newPersonLast').value.trim();
   const email = document.getElementById('newPersonEmail').value.trim();
   const phone = document.getElementById('newPersonPhone').value.trim();
   const pin = document.getElementById('newPersonPin').value.trim();
   const role = document.getElementById('newPersonRole').value;
-  if(!name || !/^\d{4,6}$/.test(pin)){ toast('Enter a name and a 4-6 digit PIN.'); return; }
+  if(!firstName || !/^\d{4,6}$/.test(pin)){ toast('Enter at least a first name and a 4-6 digit PIN.'); return; }
   const list = siteUsersCache[currentSite] || [];
   if(list.some(u=>String(u.pin)===pin)){ toast('That PIN is already taken at this site.'); return; }
-  list.push({ id:uid(), name, email:email||null, phone:phone||null, pin, role });
+  list.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin, role });
   siteUsersCache[currentSite] = list;
   await persistSiteUsers();
-  document.getElementById('newPersonName').value=''; document.getElementById('newPersonEmail').value=''; document.getElementById('newPersonPhone').value=''; document.getElementById('newPersonPin').value=''; document.getElementById('newPersonRole').value='crew';
-  toast(`Added ${name}.`);
+  document.getElementById('newPersonFirst').value=''; document.getElementById('newPersonLast').value=''; document.getElementById('newPersonEmail').value=''; document.getElementById('newPersonPhone').value=''; document.getElementById('newPersonPin').value=''; document.getElementById('newPersonRole').value='crew';
+  toast(`Added ${firstName}.`);
 });
 async function removeSiteUser(id){
   if(!confirm("Remove this person's access?")) return;
