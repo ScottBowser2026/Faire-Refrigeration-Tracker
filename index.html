@@ -214,9 +214,14 @@
   <div class="toolbar">
     <select id="filterType">
       <option value="">All types</option>
-      <option value="cooler">Coolers</option>
-      <option value="freezer">Freezers</option>
+      <option value="walk-in-cooler">Walk-in Cooler</option>
+      <option value="walk-in-freezer">Walk-in Freezer</option>
+      <option value="upright-refrigerator">Upright Refrigerator</option>
+      <option value="upright-freezer">Upright Freezer</option>
+      <option value="chest-freezer">Chest Freezer</option>
       <option value="bain-marie">Bain Marie</option>
+      <option value="glycol-chiller">Glycol Chiller</option>
+      <option value="other">Other</option>
     </select>
     <select id="filterStatus">
       <option value="">All statuses</option>
@@ -250,7 +255,7 @@
   <!-- USER CHECKLIST VIEW (User/crew role only — replaces the dashboard above) -->
   <div id="userWorkerView" style="display:none">
     <div class="section-head"><h2>My Units to Check</h2><span class="hint">Assigned to you · resets each day as you log checks</span></div>
-    <div id="userWorkerList"></div>
+    <div id="userWorkerList" style="max-height:70vh; overflow-y:auto;"></div>
   </div>
 
   <!-- MAINTENANCE TICKETS OVERVIEW (F&B Manager / Superadmin only) -->
@@ -370,10 +375,20 @@
     <h2 id="unitModalTitle">Add Unit</h2>
     <div class="field"><label>Name</label><input type="text" id="u_name"></div>
     <div class="two-col">
-      <div class="field"><label>Type</label><select id="u_type"><option value="cooler">Cooler</option><option value="freezer">Freezer</option><option value="bain-marie">Bain Marie</option></select></div>
+      <div class="field"><label>Type</label><select id="u_type">
+        <option value="walk-in-cooler">Walk-in Cooler</option>
+        <option value="walk-in-freezer">Walk-in Freezer</option>
+        <option value="upright-refrigerator">Upright Refrigerator</option>
+        <option value="upright-freezer">Upright Freezer</option>
+        <option value="chest-freezer">Chest Freezer</option>
+        <option value="bain-marie">Bain Marie</option>
+        <option value="glycol-chiller">Glycol Chiller</option>
+        <option value="other">Other</option>
+      </select></div>
       <div class="field"><label>Runtime</label><select id="u_runtime"><option value="always">Always on</option><option value="seasonal">Seasonal</option></select></div>
     </div>
-    <div class="field"><label>Location</label><input type="text" id="u_location"></div>
+    <div class="field"><label>Booth <span class="hint">(groups equipment together — e.g. "Turkey Leg Tavern". Start typing to see existing booths.)</span></label><input type="text" id="u_booth" list="boothDatalist"><datalist id="boothDatalist"></datalist></div>
+    <div class="field"><label>Location <span class="hint">(more specific placement within the booth, optional)</span></label><input type="text" id="u_location"></div>
     <div class="field"><label>Stock / contents</label><input type="text" id="u_stock"></div>
     <div class="field"><label>Assigned Users <span class="hint">(any of them can check it — first one to log it clears it for everyone)</span></label><select id="u_assigned_user" multiple size="4" style="height:auto;"></select></div>
     <div class="two-col">
@@ -1204,7 +1219,7 @@ function renderUserWorkerList(){
   }
   const groups = {};
   myUnits.forEach(u=>{
-    const key = (u.location||'').trim() || 'Ungrouped';
+    const key = (u.booth||'').trim() || (u.location||'').trim() || 'Ungrouped';
     if(!groups[key]) groups[key] = [];
     groups[key].push(u);
   });
@@ -1216,9 +1231,10 @@ function renderUserWorkerList(){
       const comp = complianceStats(u);
       const streakText = comp.streakGood===null ? 'no history yet' : `${comp.streakDays} day${comp.streakDays===1?'':'s'} ${comp.streakGood?'in':'out of'} compliance`;
       const readingText = u.currentTemp!=null ? `${u.currentTemp}°F · fans ${u.fansOperating?'ok':'DOWN'}` : 'never checked';
+      const locText = (u.location && u.location.trim() && u.location.trim()!==key) ? ` · ${escapeHtml(u.location.trim())}` : '';
       return `<div class="checklist-row">
         <div>
-          <span class="name">${escapeHtml(u.name)}</span>
+          <span class="name">${escapeHtml(u.name)}</span><span class="loc">${locText}</span>
           <div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:2px;">${readingText} · ${streakText}</div>
         </div>
         <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log Check</button>
@@ -1229,7 +1245,7 @@ function renderUserWorkerList(){
         <span>${escapeHtml(key)} <span style="color:#888; font-weight:400; font-size:12px;">(${list.length})</span></span>
         <span style="color:#888;">${isOpen?'▾':'▸'}</span>
       </button>
-      ${isOpen ? `<div style="max-height:340px; overflow-y:auto; padding:0 14px;">${rows}</div>` : ''}
+      ${isOpen ? `<div style="padding:0 14px;">${rows}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -1369,6 +1385,11 @@ function switchMainView(view){
 }
 
 function usersWithRole(role){ return (siteUsersCache[currentSite]||[]).filter(u=>u.role===role); }
+function populateBoothDatalist(){
+  const dl = document.getElementById('boothDatalist');
+  const booths = [...new Set(units.map(u=>(u.booth||'').trim()).filter(Boolean))].sort();
+  dl.innerHTML = booths.map(b=>`<option value="${escapeHtml(b)}">`).join('');
+}
 function renderUnitAssignments(){
   const wrap = document.getElementById('unitAssignmentsList'); if(!wrap) return;
   const users = usersWithRole('crew');
@@ -1432,9 +1453,9 @@ function openAddModal(){
   editingUnitId=null;
   document.getElementById('unitModalTitle').textContent='Add Unit';
   document.getElementById('deleteUnitBtn').style.display='none';
-  ['u_name','u_location','u_stock','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
+  ['u_name','u_booth','u_location','u_stock','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('u_type').value='cooler'; document.getElementById('u_runtime').value='always';
-  populateAssignedUserSelect([]);
+  populateAssignedUserSelect([]); populateBoothDatalist();
   document.getElementById('unitOverlay').classList.add('show');
 }
 function openEditModal(unitId){
@@ -1445,11 +1466,12 @@ function openEditModal(unitId){
   document.getElementById('u_name').value=u.name||'';
   document.getElementById('u_type').value=u.type||'cooler';
   document.getElementById('u_runtime').value=u.runtime||'always';
+  document.getElementById('u_booth').value=u.booth||'';
   document.getElementById('u_location').value=u.location||'';
   document.getElementById('u_stock').value=u.stock||'';
   document.getElementById('u_tmin').value=u.tmin!=null?u.tmin:'';
   document.getElementById('u_tmax').value=u.tmax!=null?u.tmax:'';
-  populateAssignedUserSelect(u.assignedUserIds||[]);
+  populateAssignedUserSelect(u.assignedUserIds||[]); populateBoothDatalist();
   document.getElementById('unitOverlay').classList.add('show');
 }
 function closeUnitModal(){ document.getElementById('unitOverlay').classList.remove('show'); }
@@ -1461,7 +1483,7 @@ async function saveUnit(){
   const assignedIds = Array.from(document.getElementById('u_assigned_user').selectedOptions).map(o=>o.value);
   const assignedUsers = assignedIds.map(id=>usersWithRole('crew').find(x=>x.id===id)).filter(Boolean);
   const data = { name, type:document.getElementById('u_type').value, runtime:document.getElementById('u_runtime').value,
-    location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
+    booth:document.getElementById('u_booth').value.trim(), location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
     tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
   if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); Object.assign(u,data); }
   else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
