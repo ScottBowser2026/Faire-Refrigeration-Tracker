@@ -236,6 +236,7 @@
     <button class="btn btn-outline" id="masterReportBtn" style="display:none">Master report</button>
     <button class="btn btn-primary" id="submitDailyReportBtn">Submit Daily Report</button>
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
+    <button class="btn btn-outline" id="importCsvBtn" style="display:none">Import from CSV</button>
   </div>
 
   <div class="grid" id="unitGrid"></div>
@@ -490,6 +491,30 @@
     </div>
 
     <div class="modal-actions"><button class="btn btn-outline" onclick="closePmModal()">Close</button></div>
+  </div>
+</div>
+
+<!-- CSV IMPORT -->
+<div class="overlay" id="csvImportOverlay">
+  <div class="modal" style="max-width:560px;">
+    <h2>Import Units from CSV</h2>
+    <div class="sub">Columns: Location, Equipment, Equipment, Equipment, Equipment… (any number of equipment columns). One unit gets created per equipment cell — Location becomes each unit's Booth.</div>
+    <div id="csvPasteStep">
+      <div class="field"><label>Paste CSV content, or choose a file</label>
+        <input type="file" id="csv_file" accept=".csv,text/csv" style="margin-bottom:8px;">
+        <textarea id="csv_text" rows="6" placeholder="location,Equipment,Equipment&#10;Absinthe Bar,Walk in Cooler,&#10;Mansion,Upright Refrigerator #1,Upright Refrigerator #2"></textarea>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="previewCsvImport()">Preview Import</button>
+    </div>
+    <div id="csvPreviewStep" style="display:none;">
+      <div id="csvPreviewSummary" style="font-size:13.5px; margin-bottom:10px;"></div>
+      <div id="csvPreviewList" style="max-height:280px; overflow-y:auto; margin-bottom:14px;"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="backToCsvPaste()">Back</button>
+        <button class="btn btn-primary" onclick="confirmCsvImport()">Create These Units</button>
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closeCsvImportModal()">Close</button></div>
   </div>
 </div>
 
@@ -846,6 +871,7 @@ function renderRoleControls(){
     }
     document.getElementById('accessSiteHint').textContent = SITES[currentSite] ? `Viewing: ${SITES[currentSite].name}` : '';
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
+    document.getElementById('importCsvBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
@@ -1449,6 +1475,88 @@ function populateAssignedUserSelect(currentAssignedIds){
   const ids = currentAssignedIds || [];
   sel.innerHTML = users.map(u=>`<option value="${u.id}" ${ids.includes(u.id)?'selected':''}>${escapeHtml(fullName(u))}</option>`).join('');
 }
+// ---- CSV Import (bulk-create units from a Location + Equipment columns file) ----
+function inferEquipmentType(text){
+  const t = text.toLowerCase();
+  if(t.includes('walk') && t.includes('cooler')) return 'walk-in-cooler';
+  if(t.includes('walk') && t.includes('freezer')) return 'walk-in-freezer';
+  if(t.includes('upright') && t.includes('refrig')) return 'upright-refrigerator';
+  if(t.includes('upright') && t.includes('freezer')) return 'upright-freezer';
+  if(t.includes('chest') && t.includes('freezer')) return 'chest-freezer';
+  if(t.includes('bain')) return 'bain-marie';
+  if(t.includes('glycol') || t.includes('gycol')) return 'glycol-chiller';
+  return 'other';
+}
+function equipTypeLabel(type){
+  return { 'walk-in-cooler':'Walk-in Cooler', 'walk-in-freezer':'Walk-in Freezer', 'upright-refrigerator':'Upright Refrigerator',
+    'upright-freezer':'Upright Freezer', 'chest-freezer':'Chest Freezer', 'bain-marie':'Bain Marie', 'glycol-chiller':'Glycol Chiller', 'other':'Other' }[type] || 'Other';
+}
+function parseCsvSimple(text){
+  return text.split(/\r?\n/).filter(l=>l.trim().length>0).map(line=>line.split(',').map(cell=>cell.trim().replace(/^"|"$/g,'')));
+}
+let pendingCsvUnits = [];
+function openCsvImportModal(){
+  document.getElementById('csv_text').value=''; document.getElementById('csv_file').value='';
+  document.getElementById('csvPasteStep').style.display='block';
+  document.getElementById('csvPreviewStep').style.display='none';
+  document.getElementById('csvImportOverlay').classList.add('show');
+}
+function closeCsvImportModal(){ document.getElementById('csvImportOverlay').classList.remove('show'); pendingCsvUnits=[]; }
+function backToCsvPaste(){
+  document.getElementById('csvPreviewStep').style.display='none';
+  document.getElementById('csvPasteStep').style.display='block';
+}
+function previewCsvImport(){
+  const text = document.getElementById('csv_text').value.trim();
+  if(!text){ toast('Paste CSV content or choose a file first.'); return; }
+  const rows = parseCsvSimple(text);
+  if(rows.length<2){ toast('No data rows found below the header.'); return; }
+  pendingCsvUnits = [];
+  rows.slice(1).forEach(row=>{
+    const location = (row[0]||'').trim();
+    if(!location) return;
+    for(let i=1;i<row.length;i++){
+      const equip = (row[i]||'').trim();
+      if(equip) pendingCsvUnits.push({ booth: location, name: equip, type: inferEquipmentType(equip) });
+    }
+  });
+  if(pendingCsvUnits.length===0){ toast('No equipment found in that file — check the column layout.'); return; }
+  document.getElementById('csvPasteStep').style.display='none';
+  document.getElementById('csvPreviewStep').style.display='block';
+  const boothCount = new Set(pendingCsvUnits.map(u=>u.booth)).size;
+  document.getElementById('csvPreviewSummary').textContent = `${pendingCsvUnits.length} unit(s) will be created across ${boothCount} booth(s). Check the inferred type on each — change it if it's wrong before confirming.`;
+  renderCsvPreviewList();
+}
+function renderCsvPreviewList(){
+  const wrap = document.getElementById('csvPreviewList');
+  const typeOptions = ['walk-in-cooler','walk-in-freezer','upright-refrigerator','upright-freezer','chest-freezer','bain-marie','glycol-chiller','other'];
+  wrap.innerHTML = pendingCsvUnits.map((u,i)=>`
+    <div style="display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); font-size:13px;">
+      <div style="flex:1;"><b>${escapeHtml(u.booth)}</b> — ${escapeHtml(u.name)}</div>
+      <select onchange="pendingCsvUnits[${i}].type=this.value">
+        ${typeOptions.map(t=>`<option value="${t}" ${u.type===t?'selected':''}>${equipTypeLabel(t)}</option>`).join('')}
+      </select>
+    </div>`).join('');
+}
+async function confirmCsvImport(){
+  if(!confirm(`Create ${pendingCsvUnits.length} new unit(s) at ${SITES[currentSite].name}? This can't be undone in bulk — you'd delete them one at a time if needed.`)) return;
+  pendingCsvUnits.forEach(u=>{
+    units.push({ id:uid(), name:u.name, type:u.type, runtime:'always', booth:u.booth, location:'', stock:'',
+      tmin:33, tmax:40, assignedUserIds:[], assignedUserNames:[], currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] });
+  });
+  await persistUnits();
+  toast(`${pendingCsvUnits.length} units created.`);
+  closeCsvImportModal();
+  render(); renderFleetChart(); renderUnitAssignments(); renderUserWorkerList();
+}
+document.getElementById('importCsvBtn').addEventListener('click', openCsvImportModal);
+document.getElementById('csv_file').addEventListener('change', (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{ document.getElementById('csv_text').value = reader.result; };
+  reader.readAsText(file);
+});
+
 function openAddModal(){
   editingUnitId=null;
   document.getElementById('unitModalTitle').textContent='Add Unit';
