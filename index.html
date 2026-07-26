@@ -244,6 +244,7 @@
     <button class="btn btn-primary" id="submitDailyReportBtn">Submit Daily Report</button>
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
     <button class="btn btn-outline" id="importCsvBtn" style="display:none">Import from CSV</button>
+    <button class="btn btn-outline" id="downloadCsvTemplateBtn" style="display:none">Download Template</button>
   </div>
 
   <div class="grid" id="unitGrid"></div>
@@ -339,7 +340,7 @@
       <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
         <button class="btn btn-outline btn-small" id="exportUsersCsvBtn">Download CSV</button>
         <button class="btn btn-outline btn-small" id="importUsersCsvBtn">Import from CSV</button>
-        <button class="btn btn-danger btn-small" id="deleteAllUsersBtn" style="display:none">Delete All Site Users</button>
+        <button class="btn btn-outline btn-small" id="downloadUsersCsvTemplateBtn">Download Template</button>
       </div>
       <div id="accessList"></div>
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
@@ -358,12 +359,6 @@
     </div>
 
     <div class="panel">
-      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Unit Assignments <span class="hint">(assign each unit to a User for daily checks)</span></div>
-      <button class="btn btn-danger btn-small" id="deleteAllUnitsBtn" style="display:none; margin-bottom:10px;">Delete All Units</button>
-      <div id="unitAssignmentsList"></div>
-    </div>
-
-    <div class="panel">
       <div style="font-weight:700; font-size:13px; margin-bottom:4px;">Notify List <span class="hint">(this site only)</span></div>
       <div style="font-size:12px; color:#777; margin-bottom:10px;">Everyone here gets this site's flagged-unit alerts, not-checked reports, and master reports.</div>
       <div id="recipientList"></div>
@@ -371,6 +366,14 @@
         <input type="text" id="newRecipientName" placeholder="Name" style="flex:1; min-width:120px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newRecipientEmail" placeholder="Email address" style="flex:1; min-width:180px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <button class="btn btn-primary btn-small" id="addRecipientBtn">Add</button>
+      </div>
+    </div>
+
+    <div class="panel" id="dangerZonePanel" style="display:none; border-color:var(--flag);">
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px; color:var(--flag);">Danger Zone <span class="hint" style="color:#888;">(Superadmin only — permanent, cannot be undone)</span></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-danger btn-small" id="deleteAllUsersBtn">Delete All Site Users</button>
+        <button class="btn btn-danger btn-small" id="deleteAllUnitsBtn">Delete All Units</button>
       </div>
     </div>
   </div>
@@ -744,6 +747,13 @@ function migratePersonRecord(p){
   }
   return p;
 }
+const VALID_UNIT_TYPES = ['walk-in-cooler','walk-in-freezer','upright-refrigerator','upright-freezer','chest-freezer','bain-marie','glycol-chiller','other'];
+function migrateUnitType(u){
+  if(VALID_UNIT_TYPES.includes(u.type)) return u;
+  const old = { 'cooler':'walk-in-cooler', 'freezer':'walk-in-freezer' }[u.type];
+  u.type = old || 'other';
+  return u;
+}
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
 function isSuperadmin(){ return currentRole==='superadmin'; }
@@ -861,7 +871,16 @@ async function loadSiteData(siteKey){
 
   const unitsSnap = await siteRef('units', siteKey).once('value');
   units = objToArray(unitsSnap.val());
-  units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } });
+  let unitsNeedPersist = false;
+  units.forEach(u=>{
+    if(!u.history) u.history=[];
+    if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; unitsNeedPersist=true; }
+    else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; }
+    const beforeType = u.type;
+    migrateUnitType(u);
+    if(u.type!==beforeType) unitsNeedPersist = true;
+  });
+  if(unitsNeedPersist) await siteRef('units', siteKey).set(arrayToObj(units));
 
   const recSnap = await siteRef('notifyRecipients', siteKey).once('value');
   recipients = recSnap.exists() ? objToArray(recSnap.val()) : [];
@@ -870,7 +889,7 @@ async function loadSiteData(siteKey){
   dailyReports = drSnap.exists() ? objToArray(drSnap.val()) : [];
 
   unitsListenerRef = siteRef('units', siteKey);
-  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
+  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } migrateUnitType(u); }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
   recipientsListenerRef = siteRef('notifyRecipients', siteKey);
   recipientsListenerRef.on('value', snap=>{ recipients = snap.exists()?objToArray(snap.val()):[]; renderRecipientList(); });
   dailyReportsListenerRef = siteRef('dailyReports', siteKey);
@@ -942,11 +961,11 @@ function renderRoleControls(){
     document.getElementById('accessSiteHint').textContent = SITES[currentSite] ? `Viewing: ${SITES[currentSite].name}` : '';
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
     document.getElementById('importCsvBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
+    document.getElementById('downloadCsvTemplateBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
-    document.getElementById('deleteAllUsersBtn').style.display = isSuperadmin() ? 'inline-block' : 'none';
-    document.getElementById('deleteAllUnitsBtn').style.display = isSuperadmin() ? 'inline-block' : 'none';
+    document.getElementById('dangerZonePanel').style.display = isSuperadmin() ? 'block' : 'none';
 
     document.getElementById('maintenanceWorkerView').style.display = isMaintenanceWorker() ? 'block' : 'none';
     document.getElementById('userWorkerView').style.display = isUserRole() ? 'block' : 'none';
@@ -1551,6 +1570,21 @@ document.getElementById('exportUsersCsvBtn').addEventListener('click', ()=>{
   URL.revokeObjectURL(url);
   toast(`Downloaded ${list.length} user(s).`);
 });
+document.getElementById('downloadUsersCsvTemplateBtn').addEventListener('click', ()=>{
+  const lines = [
+    'FirstName,LastName,Email,Phone,Role,PIN',
+    '"Kaitlyn","Brown","kaitlyn@example.com","555-1212","User",""',
+    '"Josh","Neil","josh@example.com","555-1213","Maintenance",""',
+    '"Daniel","Yocum","daniel@example.com","555-1214","F&B Manager",""'
+  ];
+  const blob = new Blob([lines.join('\n')], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `site-users-import-template-${localDateKey()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast('Blank template downloaded — Role should read "User", "F&B Manager", or "Maintenance". Leave PIN blank to auto-generate.');
+});
 
 let pendingUserCsv = [];
 function openUserCsvImportModal(){
@@ -1782,6 +1816,23 @@ async function confirmCsvImport(){
   render(); renderFleetChart(); renderUnitAssignments(); renderUserWorkerList();
 }
 document.getElementById('importCsvBtn').addEventListener('click', openCsvImportModal);
+document.getElementById('downloadCsvTemplateBtn').addEventListener('click', ()=>{
+  const existingLocations = [...new Set(units.map(u=>unitGroupKey(u)).filter(k=>k && k!=='Ungrouped'))].sort();
+  const lines = ['location,Equipment,Equipment,Equipment,Equipment'];
+  if(existingLocations.length>0){
+    existingLocations.forEach(loc=>lines.push(`"${loc.replace(/"/g,'""')}",,,,`));
+  } else {
+    lines.push('"Turkey Leg Tavern","Walk in Cooler","Walk in Freezer",,');
+    lines.push('"Brewery","Gycol Chiller","Walk in Cooler",,');
+  }
+  const blob = new Blob([lines.join('\n')], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${currentSite}-equipment-import-template-${localDateKey()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast(existingLocations.length>0 ? `Template downloaded with ${existingLocations.length} existing location(s) — fill in equipment for each.` : 'Blank template downloaded with example rows.');
+});
 document.getElementById('csv_file').addEventListener('change', (e)=>{
   const file = e.target.files[0]; if(!file) return;
   const reader = new FileReader();
