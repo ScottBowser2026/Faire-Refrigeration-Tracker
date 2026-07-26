@@ -57,6 +57,7 @@
   .role-superadmin{background:#d9b26a; color:#3a2b0d;}
   .role-admin{background:var(--frost); color:#0d2a2b;}
   .role-crew{background:#5b675f; color:var(--paper);}
+  .role-maint{background:var(--maint); color:#fff;}
 
   .site-switcher{ display:flex; align-items:center; gap:6px; }
   .site-switcher select{ font-weight:600; }
@@ -176,6 +177,8 @@
 
 <main id="appMain" style="display:none">
 
+  <div id="normalDashboardWrap">
+
   <div class="section-head"><h2>Fleet Compliance — last 14 days</h2><span class="hint">% of units in range each day</span></div>
   <div class="panel"><canvas id="fleetChart" height="90"></canvas></div>
 
@@ -209,9 +212,29 @@
 
   <div class="grid" id="unitGrid"></div>
 
+  </div><!-- /normalDashboardWrap -->
+
+  <!-- MAINTENANCE WORKER VIEW (Maintenance role only — replaces the dashboard above) -->
+  <div id="maintenanceWorkerView" style="display:none">
+    <div id="maintenancePmDueList"></div>
+    <div class="section-head"><h2>My Maintenance List</h2><span class="hint">Units currently flagged for maintenance at this site</span></div>
+    <div id="maintenanceWorkerList"></div>
+  </div>
+
+  <!-- MAINTENANCE TICKETS OVERVIEW (F&B Manager / Superadmin only) -->
+  <div id="maintenanceTicketsOverviewWrap" style="display:none">
+    <div class="section-head"><h2>Maintenance Tickets</h2><span class="hint">Open tickets at this site</span></div>
+    <div class="panel" id="maintenanceTicketsOverview"></div>
+  </div>
+
   <!-- MANAGE ACCESS -->
   <div id="accessPanelWrap" style="display:none">
     <div class="section-head"><h2>Manage Access</h2><span class="hint" id="accessSiteHint"></span></div>
+
+    <div class="panel" id="allSitesOverviewPanel" style="display:none">
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">All Sites — Who's Where <span class="hint">(Superadmin overview, read-only)</span></div>
+      <div id="allSitesOverviewList"></div>
+    </div>
 
     <div class="panel" id="superadminPanel" style="display:none">
       <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Superadmins <span class="hint">(access to all sites)</span></div>
@@ -233,7 +256,11 @@
         <input type="text" id="newPersonEmail" placeholder="Email" style="flex:1; min-width:140px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonPhone" placeholder="Phone" style="flex:1; min-width:120px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
         <input type="text" id="newPersonPin" placeholder="PIN" style="width:80px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
-        <label style="display:flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="newPersonAdmin"> F&amp;B Manager</label>
+        <select id="newPersonRole" style="flex:1; min-width:140px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
+          <option value="crew">User</option>
+          <option value="admin">F&amp;B Manager</option>
+          <option value="maintenance">Maintenance</option>
+        </select>
         <button class="btn btn-primary btn-small" id="addPersonBtn">Add</button>
       </div>
     </div>
@@ -253,7 +280,7 @@
 </main>
 
 <!-- LOGIN -->
-<div class="overlay show" id="loginOverlay">
+<div class="overlay show" id="loginOverlay" style="background:var(--steel-2);">
   <div class="modal" style="max-width:340px; text-align:center;">
     <div id="loginPanel">
       <h2 style="margin-bottom:2px;">Refrigeration Tracker Login</h2>
@@ -301,7 +328,87 @@
   </div>
 </div>
 
-<!-- LOG ENTRY -->
+<!-- MAINTENANCE TICKET -->
+<div class="overlay" id="ticketOverlay">
+  <div class="modal" style="max-width:520px;">
+    <h2 id="ticketModalTitle">Maintenance Ticket</h2>
+    <div class="sub" id="ticketModalSub"></div>
+
+    <div id="ticketOpenForm">
+      <div class="field"><label>Reason for maintenance</label><textarea id="ticket_reason" rows="3" placeholder="Describe the issue…"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeTicketModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="openMaintenanceTicket()">Open Ticket</button>
+      </div>
+    </div>
+
+    <div id="ticketDetailView" style="display:none">
+      <div id="ticketReasonDisplay" style="font-size:13.5px; padding:8px 10px; background:var(--maint-bg); border-radius:7px; margin-bottom:12px;"></div>
+
+      <div style="font-weight:700; font-size:13px; margin-bottom:6px;">Entries / Notes</div>
+      <div id="ticketEntriesList" style="max-height:220px; overflow-y:auto; margin-bottom:10px;"></div>
+      <div class="field"><label>Add a note</label><textarea id="ticket_entry_note" rows="2" placeholder="What was checked or done today…"></textarea></div>
+      <div class="field"><label>Photo (optional)</label><input type="file" id="ticket_entry_photo" accept="image/*"></div>
+      <button class="btn btn-outline" style="width:100%; margin-bottom:16px;" onclick="addTicketEntry()">Add Entry</button>
+
+      <div id="outsideServiceSection" style="display:none">
+        <div style="font-weight:700; font-size:13px; margin-bottom:6px; border-top:1px solid var(--border); padding-top:14px;">Outside Service Calls &amp; Costs</div>
+        <div id="outsideServiceList" style="max-height:180px; overflow-y:auto; margin-bottom:10px;"></div>
+        <div class="two-col">
+          <div class="field"><label>Vendor / company</label><input type="text" id="os_vendor"></div>
+          <div class="field"><label>Cost ($)</label><input type="text" id="os_cost" inputmode="decimal"></div>
+        </div>
+        <div class="two-col">
+          <div class="field"><label>Service date</label><input type="date" id="os_date"></div>
+          <div class="field"><label>Invoice / reference #</label><input type="text" id="os_invoice"></div>
+        </div>
+        <div class="field"><label>Description</label><textarea id="os_description" rows="2" placeholder="What was serviced/repaired…"></textarea></div>
+        <button class="btn btn-outline" style="width:100%; margin-bottom:16px;" onclick="addOutsideServiceCall()">Log Outside Service Call</button>
+      </div>
+
+      <div id="closeTicketSection" style="display:none; border-top:1px solid var(--border); padding-top:14px;">
+        <div class="field"><label>Closing notes</label><textarea id="ticket_close_notes" rows="2" placeholder="Summary of resolution…"></textarea></div>
+        <button class="btn btn-danger" style="width:100%;" onclick="closeMaintenanceTicket()">Close Ticket</button>
+      </div>
+    </div>
+
+    <div class="modal-actions" id="ticketDetailCloseRow" style="display:none">
+      <button class="btn btn-outline" onclick="closeTicketModal()">Close Window</button>
+    </div>
+  </div>
+</div>
+
+<!-- PM TASKS (scheduled preventive maintenance) -->
+<div class="overlay" id="pmOverlay">
+  <div class="modal" style="max-width:480px;">
+    <h2 id="pmModalTitle">PM Tasks</h2>
+    <div class="sub">Recurring preventive maintenance for this unit.</div>
+
+    <div id="pmTaskList" style="margin-bottom:16px;"></div>
+
+    <div style="border-top:1px solid var(--border); padding-top:14px;">
+      <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Add a PM Task</div>
+      <div class="field"><label>Task name</label><input type="text" id="pm_name" placeholder="e.g. Clean condenser coils"></div>
+      <div class="two-col">
+        <div class="field"><label>Repeat every (days)</label><input type="text" id="pm_interval" inputmode="numeric" placeholder="e.g. 30"></div>
+        <div class="field"><label>Quick presets</label>
+          <select id="pm_preset" onchange="if(this.value) document.getElementById('pm_interval').value=this.value;">
+            <option value="">Custom…</option>
+            <option value="7">Weekly (7)</option>
+            <option value="14">Biweekly (14)</option>
+            <option value="30">Monthly (30)</option>
+            <option value="90">Quarterly (90)</option>
+            <option value="180">Semiannual (180)</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="addPmTask()">Add PM Task</button>
+    </div>
+
+    <div class="modal-actions"><button class="btn btn-outline" onclick="closePmModal()">Close</button></div>
+  </div>
+</div>
+
 <div class="overlay" id="checkOverlay">
   <div class="modal">
     <h2 id="checkModalTitle">Log Entry</h2>
@@ -317,6 +424,11 @@
       <div class="two-col">
         <div class="field"><label>Temperature (°F)</label><input type="text" id="c_temp" inputmode="decimal"></div>
         <div class="field"><label>Fans operating?</label><select id="c_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
+      </div>
+    </div>
+    <div id="performedByWrap" style="display:none">
+      <div class="field"><label>Performed by</label>
+        <select id="c_performedby"><option value="Staff">Staff</option><option value="Outside Service Co">Outside Service Co</option></select>
       </div>
     </div>
     <div class="field"><label>Notes</label><textarea id="c_notes" rows="3" placeholder="Optional for routine checks, describe what was done for maintenance/repair/cleaning"></textarea></div>
@@ -360,6 +472,10 @@
     <h2 id="historyTitle">History</h2>
     <div class="sub" id="historySub"></div>
     <div id="historyCompliance" style="font-family:var(--mono); font-size:12px; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <button class="btn btn-outline btn-small" id="historyTabChecks" onclick="switchHistoryTab('check')">Routine Checks</button>
+      <button class="btn btn-outline btn-small" id="historyTabMaint" onclick="switchHistoryTab('maint')">Maintenance &amp; Repairs</button>
+    </div>
     <div id="historyBody" style="max-height:55vh; overflow-y:auto; margin:10px 0;"></div>
     <div class="modal-actions"><button class="btn btn-outline" onclick="closeHistoryModal()">Close</button></div>
   </div>
@@ -428,6 +544,9 @@ function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&'
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
 function isSuperadmin(){ return currentRole==='superadmin'; }
 function isSiteAdmin(){ return currentRole==='admin' || currentRole==='superadmin'; }
+function isMaintenanceWorker(){ return currentRole==='maintenance'; }
+function roleLabel(role){ return role==='admin' ? 'F&B Manager' : role==='maintenance' ? 'Maintenance' : 'User'; }
+function roleClass(role){ return role==='admin' ? 'role-admin' : role==='maintenance' ? 'role-maint' : 'role-crew'; }
 
 function objToArray(obj){ return obj ? Object.keys(obj).map(k=>({id:k, ...obj[k]})) : []; }
 function arrayToObj(arr){ const o={}; arr.forEach(u=>{ const {id,...rest}=u; o[id]=rest; }); return o; }
@@ -468,8 +587,15 @@ async function loadSuperadmins(){
 
 async function loadAllSiteUsersForLogin(){
   for(const key of SITE_ORDER){
-    const snap = await siteRef('users', key).once('value');
-    siteUsersCache[key] = snap.exists() ? objToArray(snap.val()) : [];
+    const initialSnap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
+    siteUsersCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()) : [];
+  }
+  for(const key of SITE_ORDER){
+    db.ref('refrigeration/sites/'+key+'/users').on('value', snap=>{
+      siteUsersCache[key] = snap.exists() ? objToArray(snap.val()) : [];
+      renderAllSitesOverview();
+      if(key===currentSite) renderAccessList();
+    });
   }
 }
 
@@ -500,8 +626,7 @@ async function loadSiteData(siteKey){
   unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; }); render(); renderFleetChart(); renderIncidents(); });
   recipientsListenerRef = siteRef('notifyRecipients', siteKey);
   recipientsListenerRef.on('value', snap=>{ recipients = snap.exists()?objToArray(snap.val()):[]; renderRecipientList(); });
-  usersListenerRef = siteRef('users', siteKey);
-  usersListenerRef.on('value', snap=>{ siteUsersCache[siteKey] = snap.exists()?objToArray(snap.val()):[]; renderAccessList(); });
+  usersListenerRef = null; // users are now kept in sync globally via loadAllSiteUsersForLogin's live listeners
 }
 
 async function persistUnits(){ await siteRef('units').set(arrayToObj(units)); }
@@ -542,13 +667,13 @@ function renderRoleControls(){
   const whoBox = document.getElementById('whoBox');
   document.getElementById('siteEyebrow').textContent = SITES[currentSite] ? SITES[currentSite].name : 'Renaissance Faire';
   if(currentUser){
-    const roleLabel = currentRole==='superadmin'?'Superadmin':currentRole==='admin'?'F&B Manager':'User';
-    const roleClass = currentRole==='superadmin'?'role-superadmin':currentRole==='admin'?'role-admin':'role-crew';
+    const roleLabel_ = currentRole==='superadmin'?'Superadmin':roleLabel(currentRole);
+    const roleClass_ = currentRole==='superadmin'?'role-superadmin':roleClass(currentRole);
     let switcherHtml = '';
     if(isSuperadmin()){
       switcherHtml = `<div class="site-switcher"><select id="siteSwitcher">${SITE_ORDER.map(k=>`<option value="${k}" ${k===currentSite?'selected':''}>${SITES[k].name}</option>`).join('')}</select></div>`;
     }
-    whoBox.innerHTML = `${switcherHtml}<span class="role-pill ${roleClass}">${roleLabel}</span>
+    whoBox.innerHTML = `${switcherHtml}<span class="role-pill ${roleClass_}">${roleLabel_}</span>
       <span style="font-weight:600;">${escapeHtml(currentUser)}</span>
       <button class="btn who-btn btn-small" id="logoutBtn">Log Out</button>`;
     document.getElementById('logoutBtn').addEventListener('click', logout);
@@ -557,7 +682,7 @@ function renderRoleControls(){
         currentSite = e.target.value;
         sessionStorage.setItem('rt_last_site', currentSite);
         await loadSiteData(currentSite);
-        renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList();
+        renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList();
         toast(`Switched to ${SITES[currentSite].name}.`);
       });
     }
@@ -566,6 +691,10 @@ function renderRoleControls(){
     document.getElementById('accessSiteHint').textContent = SITES[currentSite] ? `Viewing: ${SITES[currentSite].name}` : '';
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
     document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
+
+    document.getElementById('normalDashboardWrap').style.display = isMaintenanceWorker() ? 'none' : 'block';
+    document.getElementById('maintenanceWorkerView').style.display = isMaintenanceWorker() ? 'block' : 'none';
+    document.getElementById('maintenanceTicketsOverviewWrap').style.display = isSiteAdmin() ? 'block' : 'none';
   } else {
     whoBox.innerHTML = `<button class="btn who-btn btn-small" id="loginBtn">Log In</button>`;
     document.getElementById('loginBtn').addEventListener('click', openLoginModal);
@@ -593,7 +722,7 @@ async function submitLogin(){
   sessionStorage.setItem('rt_session_pin', pin);
   closeLoginModal();
   await loadSiteData(currentSite);
-  showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderSuperadminList();
+  showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
   toast(`Logged in as ${match.user.name} (${SITES[currentSite].name}).`);
 }
 document.getElementById('login_pin').addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
@@ -689,19 +818,248 @@ function render(){
     let compHtml = '';
     if(comp.streakGood===true) compHtml = `<div class="card-compliance good">${comp.streakDays} day${comp.streakDays===1?'':'s'} in compliance</div>`;
     else if(comp.streakGood===false) compHtml = `<div class="card-compliance bad">${comp.streakDays} day${comp.streakDays===1?'':'s'} out of compliance</div>`;
+    const hasTicket = !!u.maintenanceTicket;
+    const ticketBadgeHtml = hasTicket ? `<div class="card-compliance" style="border-color:var(--maint); color:var(--maint);">🔧 Maintenance open — since ${fmtDate(u.maintenanceTicket.openedAt)}</div>` : '';
+    const ticketBtnHtml = isSiteAdmin() ? `<button class="btn btn-outline btn-small" style="${hasTicket?'border-color:var(--maint); color:var(--maint);':''}" onclick="openTicketModal('${u.id}')">${hasTicket?'Manage Ticket':'Mark for Maintenance'}</button>` : '';
+    const duePmTasks = (u.pmTasks||[]).filter(t=>pmDueInfo(t).isDue);
+    const pmBadgeHtml = duePmTasks.length>0 ? `<div class="card-compliance bad">🗓️ ${duePmTasks.length} PM task${duePmTasks.length===1?'':'s'} due</div>` : '';
+    const pmBtnHtml = isSiteAdmin() ? `<button class="btn btn-outline btn-small" onclick="openPmModal('${u.id}')">PM Tasks${duePmTasks.length>0?' ('+duePmTasks.length+')':''}</button>` : '';
     return `<div class="card">
       <div class="card-top"><div><div class="card-name">${escapeHtml(u.name)}</div><div class="card-loc">${escapeHtml(u.location||'')}</div></div>
       <span class="status-badge ${badgeClass}">${badgeLabel}</span></div>
       <div class="card-reading"><span><b>${u.currentTemp!=null?u.currentTemp+'°F':'—'}</b></span><span>fans ${u.fansOperating===true?'ok':u.fansOperating===false?'DOWN':'—'}</span></div>
       ${compHtml}
+      ${ticketBadgeHtml}
+      ${pmBadgeHtml}
       <div class="card-last">${neverChecked(u)?'Never checked':`Last: ${fmtDate(u.lastCheckAt)} · ${escapeHtml(u.lastCheckBy||'')}`}</div>
       <div class="card-actions">
         <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log entry</button>
         <button class="btn btn-outline btn-small" onclick="openHistoryModal('${u.id}')">History</button>
         <button class="btn btn-outline btn-small" onclick="openEditModal('${u.id}')">Edit</button>
+        ${ticketBtnHtml}
+        ${pmBtnHtml}
       </div>
     </div>`;
   }).join('');
+}
+
+// ---- Maintenance Tickets ----
+let ticketModalUnitId = null;
+function openTicketModal(unitId){
+  ticketModalUnitId = unitId;
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  document.getElementById('ticketModalTitle').textContent = `Maintenance Ticket — ${u.name}`;
+  renderTicketModal();
+  document.getElementById('ticketOverlay').classList.add('show');
+}
+function closeTicketModal(){ document.getElementById('ticketOverlay').classList.remove('show'); ticketModalUnitId=null; }
+function renderTicketModal(){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u) return;
+  const ticket = u.maintenanceTicket;
+  const openForm = document.getElementById('ticketOpenForm');
+  const detailView = document.getElementById('ticketDetailView');
+  const closeRow = document.getElementById('ticketDetailCloseRow');
+
+  if(!ticket){
+    document.getElementById('ticketModalSub').textContent = 'No open ticket for this unit yet.';
+    openForm.style.display = 'block'; detailView.style.display = 'none'; closeRow.style.display = 'none';
+    document.getElementById('ticket_reason').value = '';
+    return;
+  }
+  openForm.style.display = 'none'; detailView.style.display = 'block'; closeRow.style.display = 'flex';
+  document.getElementById('ticketModalSub').textContent = `Opened ${fmtDate(ticket.openedAt)} by ${ticket.openedBy}`;
+  document.getElementById('ticketReasonDisplay').textContent = ticket.reason;
+
+  const entriesList = document.getElementById('ticketEntriesList');
+  const entries = (ticket.entries||[]).slice().reverse();
+  entriesList.innerHTML = entries.length===0 ? `<div style="color:#888; font-size:13px; padding:6px 0;">No entries yet.</div>` : entries.map(e=>`
+    <div style="display:flex; gap:8px; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px;">
+      <div style="flex:1;"><b>${escapeHtml(e.by)}</b> <span style="color:#888; font-size:11.5px;">${fmtDate(e.at)}</span><div style="margin-top:2px;">${escapeHtml(e.note)}</div></div>
+      ${e.photo?`<img src="${e.photo}" onclick="openLightbox(this.src)" style="width:44px;height:44px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;">`:''}
+    </div>`).join('');
+  document.getElementById('ticket_entry_note').value=''; document.getElementById('ticket_entry_photo').value='';
+
+  // Cost/vendor tracking and closing are F&B Manager / Superadmin only — hidden from Maintenance workers.
+  const osSection = document.getElementById('outsideServiceSection');
+  const closeSection = document.getElementById('closeTicketSection');
+  osSection.style.display = isSiteAdmin() ? 'block' : 'none';
+  closeSection.style.display = isSiteAdmin() ? 'block' : 'none';
+  if(isSiteAdmin()){
+    const osList = document.getElementById('outsideServiceList');
+    const calls = (ticket.outsideServiceCalls||[]).slice().reverse();
+    osList.innerHTML = calls.length===0 ? `<div style="color:#888; font-size:13px; padding:6px 0;">No outside service calls logged.</div>` : calls.map(c=>`
+      <div style="padding:8px 0; border-bottom:1px solid var(--border); font-size:13px;">
+        <b>${escapeHtml(c.vendor)}</b> — $${escapeHtml(c.cost)} <span style="color:#888; font-size:11.5px;">· ${c.serviceDate||''} ${c.invoiceRef?'· Inv# '+escapeHtml(c.invoiceRef):''}</span>
+        ${c.description?`<div style="color:#666; margin-top:2px;">${escapeHtml(c.description)}</div>`:''}
+        <div style="color:#888; font-size:11px; margin-top:2px;">logged by ${escapeHtml(c.loggedBy)}</div>
+      </div>`).join('');
+    document.getElementById('os_vendor').value=''; document.getElementById('os_cost').value='';
+    document.getElementById('os_date').value=''; document.getElementById('os_invoice').value=''; document.getElementById('os_description').value='';
+    document.getElementById('ticket_close_notes').value='';
+  }
+}
+async function openMaintenanceTicket(){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u) return;
+  const reason = document.getElementById('ticket_reason').value.trim();
+  if(!reason){ toast('Describe the reason for maintenance.'); return; }
+  u.maintenanceTicket = { openedBy:currentUser, openedAt:new Date().toISOString(), reason, entries:[], outsideServiceCalls:[] };
+  await persistUnits(); renderTicketModal(); render(); toast('Maintenance ticket opened.');
+}
+async function addTicketEntry(){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
+  const note = document.getElementById('ticket_entry_note').value.trim();
+  const photoFile = document.getElementById('ticket_entry_photo').files[0];
+  if(!note){ toast('Add a note first.'); return; }
+  let photoDataUrl = null;
+  if(photoFile){ if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; } photoDataUrl = await fileToDataUrl(photoFile); }
+  u.maintenanceTicket.entries.push({ at:new Date().toISOString(), by:currentUser, note, photo:photoDataUrl });
+  await persistUnits(); renderTicketModal(); toast('Entry added.');
+}
+async function addOutsideServiceCall(){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
+  const vendor = document.getElementById('os_vendor').value.trim();
+  const cost = document.getElementById('os_cost').value.trim();
+  const serviceDate = document.getElementById('os_date').value;
+  const invoiceRef = document.getElementById('os_invoice').value.trim();
+  const description = document.getElementById('os_description').value.trim();
+  if(!vendor || !cost){ toast('Enter at least a vendor and cost.'); return; }
+  u.maintenanceTicket.outsideServiceCalls.push({ vendor, cost, serviceDate, invoiceRef, description, loggedBy:currentUser, at:new Date().toISOString() });
+  await persistUnits(); renderTicketModal(); renderMaintenanceTicketsOverview(); toast('Outside service call logged.');
+}
+async function closeMaintenanceTicket(){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
+  if(!confirm('Close this maintenance ticket? It will move to unit history.')) return;
+  const closeNotes = document.getElementById('ticket_close_notes').value.trim();
+  const ticket = u.maintenanceTicket;
+  ticket.status='closed'; ticket.closedBy=currentUser; ticket.closedAt=new Date().toISOString(); ticket.closeNotes=closeNotes;
+  if(!u.maintenanceHistory) u.maintenanceHistory=[];
+  u.maintenanceHistory.push(ticket);
+  u.maintenanceTicket = null;
+  await persistUnits(); closeTicketModal(); render(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList(); toast('Ticket closed.');
+}
+
+function renderMaintenanceWorkerList(){
+  const wrap = document.getElementById('maintenanceWorkerList'); if(!wrap) return;
+  if(!isMaintenanceWorker()) return;
+  const flagged = units.filter(u=>u.maintenanceTicket);
+  if(flagged.length===0){ wrap.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">Nothing flagged for maintenance right now.</div>`; return; }
+  wrap.innerHTML = flagged.map(u=>`
+    <div class="panel" style="cursor:pointer;" onclick="openTicketModal('${u.id}')">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+        <div>
+          <div style="font-weight:700; font-size:15px;">${escapeHtml(u.name)}</div>
+          <div style="font-family:var(--mono); font-size:11px; color:#888;">${escapeHtml(u.location||'')}</div>
+        </div>
+        <span class="entry-badge entry-maintenance">open since ${fmtDate(u.maintenanceTicket.openedAt)}</span>
+      </div>
+      <div style="font-size:13.5px; margin-top:8px;">${escapeHtml(u.maintenanceTicket.reason)}</div>
+      <div style="font-size:12px; color:#888; margin-top:6px;">${(u.maintenanceTicket.entries||[]).length} entr${(u.maintenanceTicket.entries||[]).length===1?'y':'ies'} logged so far</div>
+    </div>`).join('');
+}
+
+function renderMaintenanceTicketsOverview(){
+  const wrap = document.getElementById('maintenanceTicketsOverview'); if(!wrap) return;
+  if(!isSiteAdmin()) return;
+  const flagged = units.filter(u=>u.maintenanceTicket);
+  if(flagged.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13.5px;">No open maintenance tickets at this site.</div>`; return; }
+  wrap.innerHTML = flagged.map(u=>{
+    const t = u.maintenanceTicket;
+    const totalCost = (t.outsideServiceCalls||[]).reduce((s,c)=>s+(parseFloat(c.cost)||0),0);
+    return `<div class="alert-row" style="cursor:pointer;" onclick="openTicketModal('${u.id}')">
+      <div><b>${escapeHtml(u.name)}</b> <span class="meta">(${escapeHtml(u.location||'')})</span><br><span style="font-size:12.5px;">${escapeHtml(t.reason)}</span></div>
+      <div style="text-align:right;"><div class="meta">since ${fmtDate(t.openedAt)}</div>${totalCost>0?`<div style="font-size:12px; font-weight:700; color:var(--maint);">$${totalCost.toFixed(2)} so far</div>`:''}</div>
+    </div>`;
+  }).join('');
+}
+
+// ---- PM (Preventive Maintenance) Tasks ----
+function pmDueInfo(task){
+  const intervalMs = task.intervalDays * 24*3600*1000;
+  const lastDone = task.lastCompletedAt ? new Date(task.lastCompletedAt).getTime() : new Date(task.createdAt).getTime();
+  const nextDue = lastDone + intervalMs;
+  const daysUntil = Math.ceil((nextDue - Date.now()) / (24*3600*1000));
+  return { nextDue, daysUntil, isDue: daysUntil<=0, isDueSoon: daysUntil>0 && daysUntil<=7 };
+}
+let pmModalUnitId = null;
+function openPmModal(unitId){
+  pmModalUnitId = unitId;
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  document.getElementById('pmModalTitle').textContent = `PM Tasks — ${u.name}`;
+  document.getElementById('pm_name').value=''; document.getElementById('pm_interval').value=''; document.getElementById('pm_preset').value='';
+  renderPmTaskList();
+  document.getElementById('pmOverlay').classList.add('show');
+}
+function closePmModal(){ document.getElementById('pmOverlay').classList.remove('show'); pmModalUnitId=null; }
+function renderPmTaskList(){
+  const u = units.find(x=>x.id===pmModalUnitId); if(!u) return;
+  const wrap = document.getElementById('pmTaskList');
+  const tasks = u.pmTasks || [];
+  if(tasks.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13px;">No PM tasks scheduled for this unit yet.</div>`; return; }
+  wrap.innerHTML = tasks.map(t=>{
+    const info = pmDueInfo(t);
+    const statusText = info.isDue ? `<span style="color:var(--flag); font-weight:700;">Due now${info.daysUntil<0?' ('+Math.abs(info.daysUntil)+' days overdue)':''}</span>`
+      : info.isDueSoon ? `<span style="color:var(--maint); font-weight:700;">Due in ${info.daysUntil} day${info.daysUntil===1?'':'s'}</span>`
+      : `<span style="color:#888;">Due in ${info.daysUntil} days</span>`;
+    return `<div style="padding:9px 0; border-bottom:1px solid var(--border); font-size:13.5px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+        <div><b>${escapeHtml(t.name)}</b><div style="font-family:var(--mono); font-size:11px; color:#888;">every ${t.intervalDays} days · ${statusText}</div>
+        ${t.lastCompletedAt?`<div style="font-size:11.5px; color:#888;">last done ${fmtDate(t.lastCompletedAt)}${t.lastCompletedBy?' by '+escapeHtml(t.lastCompletedBy):''}</div>`:'<div style="font-size:11.5px; color:#888;">never completed yet</div>'}</div>
+        <div style="display:flex; gap:6px; flex-shrink:0;">
+          <button class="btn btn-outline btn-small" onclick="completePmTask('${t.id}')">Mark Done</button>
+          <button class="btn btn-outline btn-small" onclick="deletePmTask('${t.id}')">Delete</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function addPmTask(){
+  const u = units.find(x=>x.id===pmModalUnitId); if(!u) return;
+  const name = document.getElementById('pm_name').value.trim();
+  const interval = parseInt(document.getElementById('pm_interval').value, 10);
+  if(!name || !interval || interval<1){ toast('Enter a task name and a valid interval in days.'); return; }
+  if(!u.pmTasks) u.pmTasks=[];
+  u.pmTasks.push({ id:uid(), name, intervalDays:interval, createdBy:currentUser, createdAt:new Date().toISOString(), lastCompletedAt:null, lastCompletedBy:null });
+  await persistUnits(); renderPmTaskList(); render(); renderMaintenanceWorkerList();
+  document.getElementById('pm_name').value=''; document.getElementById('pm_interval').value=''; document.getElementById('pm_preset').value='';
+  toast('PM task added.');
+}
+async function completePmTask(taskId){
+  const u = units.find(x=>x.id===pmModalUnitId); if(!u) return;
+  const t = (u.pmTasks||[]).find(x=>x.id===taskId); if(!t) return;
+  t.lastCompletedAt = new Date().toISOString(); t.lastCompletedBy = currentUser;
+  if(!u.history) u.history=[];
+  u.history.push({ at:t.lastCompletedAt, temp:null, fans:null, notes:`PM: ${t.name} completed`, photo:null, by:currentUser, entryType:'maintenance' });
+  await persistUnits(); renderPmTaskList(); render(); renderMaintenanceWorkerList(); toast('PM task marked done.');
+}
+async function deletePmTask(taskId){
+  const u = units.find(x=>x.id===pmModalUnitId); if(!u) return;
+  if(!confirm('Delete this PM task? This cannot be undone.')) return;
+  u.pmTasks = (u.pmTasks||[]).filter(t=>t.id!==taskId);
+  await persistUnits(); renderPmTaskList(); render(); renderMaintenanceWorkerList(); toast('PM task deleted.');
+}
+function renderMaintenancePmDueList(){
+  const wrap = document.getElementById('maintenancePmDueList'); if(!wrap) return;
+  const dueUnits = [];
+  units.forEach(u=>{ (u.pmTasks||[]).forEach(t=>{ if(pmDueInfo(t).isDue) dueUnits.push({u,t}); }); });
+  if(dueUnits.length===0){ wrap.innerHTML=''; return; }
+  wrap.innerHTML = `<div class="section-head"><h2>Scheduled PM Due</h2></div>` + dueUnits.map(({u,t})=>{
+    const info = pmDueInfo(t);
+    return `<div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+        <div><div style="font-weight:700; font-size:15px;">${escapeHtml(u.name)}</div><div style="font-size:13.5px; margin-top:2px;">${escapeHtml(t.name)}</div>
+        <div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:2px;">every ${t.intervalDays} days${info.daysUntil<0?' · '+Math.abs(info.daysUntil)+' days overdue':''}</div></div>
+        <button class="btn btn-primary btn-small" onclick="quickCompletePm('${u.id}','${t.id}')">Mark Done</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function quickCompletePm(unitId, taskId){
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  const t = (u.pmTasks||[]).find(x=>x.id===taskId); if(!t) return;
+  t.lastCompletedAt = new Date().toISOString(); t.lastCompletedBy = currentUser;
+  if(!u.history) u.history=[];
+  u.history.push({ at:t.lastCompletedAt, temp:null, fans:null, notes:`PM: ${t.name} completed`, photo:null, by:currentUser, entryType:'maintenance' });
+  await persistUnits(); render(); renderMaintenanceWorkerList(); toast('PM task marked done.');
 }
 
 function openAddModal(){
@@ -754,12 +1112,15 @@ function openCheckModal(unitId){
   document.getElementById('c_temp').value = u.currentTemp!=null?u.currentTemp:'';
   document.getElementById('c_fans').value = u.fansOperating===false?'false':'true';
   document.getElementById('c_notes').value=''; document.getElementById('c_photo').value='';
+  document.getElementById('c_performedby').value='Staff';
   updateTempFieldsVisibility();
   document.getElementById('checkOverlay').classList.add('show');
 }
 function closeCheckModal(){ document.getElementById('checkOverlay').classList.remove('show'); }
 function updateTempFieldsVisibility(){
-  document.getElementById('tempFieldsWrap').style.display = (document.getElementById('c_type').value==='check') ? 'block':'none';
+  const type = document.getElementById('c_type').value;
+  document.getElementById('tempFieldsWrap').style.display = (type==='check') ? 'block':'none';
+  document.getElementById('performedByWrap').style.display = (type==='repair') ? 'block':'none';
 }
 document.getElementById('c_type').addEventListener('change', updateTempFieldsVisibility);
 function fileToDataUrl(file){ return new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(r.result); r.onerror=reject; r.readAsDataURL(file); }); }
@@ -780,23 +1141,48 @@ async function saveCheck(){
   } else {
     if(!notes){ toast('Add a note describing what was done.'); return; }
     if(!u.history) u.history=[];
-    u.history.push({ at:new Date().toISOString(), temp:null, fans:null, notes, photo:photoDataUrl, by:currentUser, entryType:type });
+    const entry = { at:new Date().toISOString(), temp:null, fans:null, notes, photo:photoDataUrl, by:currentUser, entryType:type };
+    if(type==='repair') entry.performedBy = document.getElementById('c_performedby').value;
+    u.history.push(entry);
   }
   await persistUnits(); closeCheckModal(); render(); renderFleetChart(); renderIncidents();
   toast(type==='check'?'Check logged.':`${type[0].toUpperCase()+type.slice(1)} note logged.`);
 }
 
 function dayKey(iso){ const d=new Date(iso); return d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'}); }
+let historyModalUnitId = null;
+let historyTab = 'check';
 function openHistoryModal(unitId){
+  historyModalUnitId = unitId;
+  historyTab = 'check';
   const u = units.find(x=>x.id===unitId); if(!u) return;
   document.getElementById('historyTitle').textContent = `${u.name} — Full History`;
-  const hist = (u.history||[]).slice().reverse();
-  document.getElementById('historySub').textContent = `${hist.length} logged entr${hist.length===1?'y':'ies'}`;
   const comp = complianceStats(u);
   document.getElementById('historyCompliance').innerHTML = comp.streakGood===null?'No compliance data yet.'
     : `<span style="color:${comp.streakGood?'var(--ok)':'var(--flag)'}">${comp.streakDays} day${comp.streakDays===1?'':'s'} ${comp.streakGood?'in':'out of'} compliance</span> · ${comp.totalOut} day${comp.totalOut===1?'':'s'} out of compliance on record`;
+  renderHistoryBody();
+  document.getElementById('historyOverlay').classList.add('show');
+}
+function switchHistoryTab(tab){
+  historyTab = tab;
+  renderHistoryBody();
+}
+function renderHistoryBody(){
+  const u = units.find(x=>x.id===historyModalUnitId); if(!u) return;
+  const checksBtn = document.getElementById('historyTabChecks');
+  const maintBtn = document.getElementById('historyTabMaint');
+  checksBtn.style.background = historyTab==='check' ? 'var(--frost-deep)' : 'var(--card)';
+  checksBtn.style.color = historyTab==='check' ? '#fff' : 'var(--ink)';
+  maintBtn.style.background = historyTab==='maint' ? 'var(--frost-deep)' : 'var(--card)';
+  maintBtn.style.color = historyTab==='maint' ? '#fff' : 'var(--ink)';
+
+  const allHist = (u.history||[]).slice().reverse();
+  const hist = historyTab==='check'
+    ? allHist.filter(h=>!h.entryType || h.entryType==='check')
+    : allHist.filter(h=>h.entryType && h.entryType!=='check');
+  document.getElementById('historySub').textContent = `${hist.length} logged entr${hist.length===1?'y':'ies'} ${historyTab==='check'?'(routine checks)':'(maintenance & repairs)'}`;
   const body = document.getElementById('historyBody');
-  if(hist.length===0){ body.innerHTML=`<div style="padding:20px 0; color:#777;">No entries logged yet.</div>`; document.getElementById('historyOverlay').classList.add('show'); return; }
+  if(hist.length===0){ body.innerHTML=`<div style="padding:20px 0; color:#777;">No entries in this tab yet.</div>`; return; }
   const groups=[]; hist.forEach(h=>{ const key=dayKey(h.at); let g=groups.find(x=>x.key===key); if(!g){g={key,entries:[]};groups.push(g);} g.entries.push(h); });
   body.innerHTML = groups.map(g=>`
     <div style="margin-bottom:12px;">
@@ -806,10 +1192,11 @@ function openHistoryModal(unitId){
         const outOfRange = type==='check' && (h.temp<u.tmin||h.temp>u.tmax);
         const bad = outOfRange || h.fans===false;
         const readingHtml = type==='check' ? `<span style="color:${bad?'var(--flag)':'var(--ink)'}; font-weight:600;">${h.temp}°F</span>&nbsp;<span style="color:${h.fans===false?'var(--flag)':'#888'};">fans ${h.fans?'ok':'DOWN'}</span>` : '';
+        const performedByHtml = (type==='repair' && h.performedBy) ? `<span class="entry-badge" style="background:var(--unset-bg); color:#555;">${escapeHtml(h.performedBy)}</span>&nbsp;` : '';
         return `<div style="display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--border);">
           <div style="flex:1; font-size:13.5px;">
             <span class="entry-badge ${badgeClass}">${type}</span>
-            &nbsp;<span style="font-family:var(--mono); color:#888; font-size:12px;">${new Date(h.at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}</span>
+            &nbsp;${performedByHtml}<span style="font-family:var(--mono); color:#888; font-size:12px;">${new Date(h.at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}</span>
             &nbsp;${readingHtml}&nbsp;<span style="color:#888;">· ${escapeHtml(h.by)}</span>
             ${h.notes?`<div style="color:#666; font-size:12.5px; margin-top:2px;">${escapeHtml(h.notes)}</div>`:''}
           </div>
@@ -817,7 +1204,6 @@ function openHistoryModal(unitId){
         </div>`;
       }).join('')}
     </div>`).join('');
-  document.getElementById('historyOverlay').classList.add('show');
 }
 function closeHistoryModal(){ document.getElementById('historyOverlay').classList.remove('show'); }
 function openLightbox(src){ const w=window.open('','_blank'); w.document.write(`<img src="${src}" style="max-width:100%">`); }
@@ -978,12 +1364,44 @@ document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>
 });
 
 // ---- Manage Access: Site Users (Admin/Crew, this site only) ----
+function renderAllSitesOverview(){
+  const wrap = document.getElementById('allSitesOverviewList');
+  if(!wrap) return;
+  const panel = document.getElementById('allSitesOverviewPanel');
+  if(panel) panel.style.display = isSuperadmin() ? 'block' : 'none';
+  if(!isSuperadmin()) return;
+  const rows = [];
+  SITE_ORDER.forEach(key=>{
+    (siteUsersCache[key]||[]).forEach(u=>{
+      rows.push({ ...u, siteKey:key });
+    });
+  });
+  if(rows.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13px; padding:6px 0;">No Site Users added anywhere yet.</div>`; return; }
+  rows.sort((a,b)=> SITE_ORDER.indexOf(a.siteKey)-SITE_ORDER.indexOf(b.siteKey) || a.name.localeCompare(b.name));
+  wrap.innerHTML = rows.map(u=>`
+    <div class="access-row">
+      <span class="site-tag">${SITES[u.siteKey].name.split(' (')[1]?.replace(')','') || u.siteKey.toUpperCase()}</span>
+      <span class="role-pill ${roleClass(u.role)}" style="flex-shrink:0;">${roleLabel(u.role)}</span>
+      <b>${escapeHtml(u.name)}</b>
+      <span style="color:#888; font-size:12px;">${escapeHtml(u.email||'no email')}${u.phone?' · '+escapeHtml(u.phone):''}</span>
+      <span style="flex:1;"></span>
+      <button class="btn btn-outline btn-small" onclick="jumpToSite('${u.siteKey}')">Switch to this site</button>
+    </div>`).join('');
+}
+async function jumpToSite(siteKey){
+  if(siteKey===currentSite) return;
+  currentSite = siteKey;
+  sessionStorage.setItem('rt_last_site', currentSite);
+  await loadSiteData(currentSite);
+  renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList();
+  toast(`Switched to ${SITES[currentSite].name}.`);
+}
 function renderAccessList(){
   const wrap = document.getElementById('accessList'); if(!wrap) return;
   const list = siteUsersCache[currentSite] || [];
   wrap.innerHTML = list.map(u=>`
     <div class="access-row">
-      <span class="role-pill ${u.role==='admin'?'role-admin':'role-crew'}" style="flex-shrink:0;">${u.role==='admin'?'F&B Manager':'User'}</span>
+      <span class="role-pill ${roleClass(u.role)}" style="flex-shrink:0;">${roleLabel(u.role)}</span>
       <input class="name-col" value="${escapeHtml(u.name)}" onchange="updateSiteUserField('${u.id}','name',this.value)">
       <input class="email-col" value="${escapeHtml(u.email||'')}" placeholder="email" onchange="updateSiteUserField('${u.id}','email',this.value)">
       <input class="phone-col" value="${escapeHtml(u.phone||'')}" placeholder="phone" onchange="updateSiteUserField('${u.id}','phone',this.value)">
@@ -1002,14 +1420,14 @@ document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
   const email = document.getElementById('newPersonEmail').value.trim();
   const phone = document.getElementById('newPersonPhone').value.trim();
   const pin = document.getElementById('newPersonPin').value.trim();
-  const admin = document.getElementById('newPersonAdmin').checked;
+  const role = document.getElementById('newPersonRole').value;
   if(!name || !/^\d{4,6}$/.test(pin)){ toast('Enter a name and a 4-6 digit PIN.'); return; }
   const list = siteUsersCache[currentSite] || [];
   if(list.some(u=>String(u.pin)===pin)){ toast('That PIN is already taken at this site.'); return; }
-  list.push({ id:uid(), name, email:email||null, phone:phone||null, pin, role: admin?'admin':'crew' });
+  list.push({ id:uid(), name, email:email||null, phone:phone||null, pin, role });
   siteUsersCache[currentSite] = list;
   await persistSiteUsers();
-  document.getElementById('newPersonName').value=''; document.getElementById('newPersonEmail').value=''; document.getElementById('newPersonPhone').value=''; document.getElementById('newPersonPin').value=''; document.getElementById('newPersonAdmin').checked=false;
+  document.getElementById('newPersonName').value=''; document.getElementById('newPersonEmail').value=''; document.getElementById('newPersonPhone').value=''; document.getElementById('newPersonPin').value=''; document.getElementById('newPersonRole').value='crew';
   toast(`Added ${name}.`);
 });
 async function removeSiteUser(id){
@@ -1056,7 +1474,7 @@ document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.
   await loadAllSiteUsersForLogin();
   const restored = await restoreSession();
   if(restored){
-    showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderSuperadminList();
+    showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderSuperadminList();
   } else {
     showApp(false); openLoginModal();
   }
