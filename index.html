@@ -173,6 +173,7 @@
     <div class="stat"><span class="dot dot-flag"></span><b id="statFlag">0</b> flagged</div>
     <div class="stat"><span class="dot dot-unset"></span><b id="statUnset">0</b> unchecked</div>
     <div class="stat"><b id="statTotal">0</b> total units</div>
+    <div class="stat"><b id="statCheckedPct">0%</b> checked on schedule</div>
   </div>
 </header>
 
@@ -910,6 +911,8 @@ function render(){
   document.getElementById('statFlag').textContent = units.filter(u=>statusOf(u)==='flag').length;
   document.getElementById('statUnset').textContent = units.filter(u=>statusOf(u)==='unset').length;
   document.getElementById('statTotal').textContent = units.length;
+  const checkedOnSchedule = units.filter(u=>!neverChecked(u) && !isStale(u)).length;
+  document.getElementById('statCheckedPct').textContent = units.length ? Math.round((checkedOnSchedule/units.length)*100)+'%' : '—';
   if(list.length===0){ grid.innerHTML = `<div style="color:#888; font-size:13.5px; padding:20px 0;">No units match this filter.</div>`; return; }
   grid.innerHTML = list.map(u=>{
     const st = statusOf(u);
@@ -1595,6 +1598,8 @@ function renderLancelotSummary(){
   grid.innerHTML = SITE_ORDER.map(key=>{
     const unitList = siteUnitsCache[key] || [];
     const compliancePct = complianceStatsForUnits(unitList);
+    const checkedOnSchedule = unitList.filter(u=>!neverChecked(u) && !isStale(u)).length;
+    const checkingCompliancePct = unitList.length ? Math.round((checkedOnSchedule/unitList.length)*100) : null;
     let totalChecks = 0, openTickets = 0, closedTickets = 0, pmCompleted = 0, pmTracked = 0, totalCost = 0;
     unitList.forEach(u=>{
       (u.history||[]).forEach(h=>{ if(!h.entryType || h.entryType==='check') totalChecks++; });
@@ -1612,6 +1617,7 @@ function renderLancelotSummary(){
       <div class="card-name" style="margin-bottom:6px;">${SITES[key].name}</div>
       <div style="font-family:var(--mono); font-size:13px; line-height:1.9;">
         <div>${unitList.length} units tracked ${compliancePct!==null?`· <b style="color:${compliancePct>=90?'var(--ok)':'var(--flag)'}">${compliancePct}% in compliance now</b>`:''}</div>
+        <div>${checkingCompliancePct!==null?`<b style="color:${checkingCompliancePct>=90?'var(--ok)':'var(--flag)'}">${checkingCompliancePct}% checked on schedule</b>`:'No checking data yet'}</div>
         <div>${totalChecks} checks logged (all-time)</div>
         <div>${openTickets} maintenance ticket${openTickets===1?'':'s'} open · ${closedTickets} closed (all-time)</div>
         <div>${pmCompleted} / ${pmTracked} PM tasks completed at least once</div>
