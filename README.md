@@ -21,6 +21,16 @@ Multi-site cooler/freezer temperature and fan compliance tracker, covering PARF,
 | **User** | One site | Log routine checks and maintenance/repair/cleaning entries; no access to Admin Panel |
 | **Maintenance** | One site | Sees a dedicated, minimal view only — units with an open maintenance ticket **assigned to them** (or unassigned), plus any due PM tasks assigned to them (or unassigned). Can add dated notes/photos to a ticket. Cannot see costs, cannot close tickets, no access to Admin Panel |
 | **Lancelot Management** | All sites, read-only | Sees only a cross-site snapshot. No editing power anywhere |
+| **Accounting** | One site | Sees a dedicated Costs tab only — a running total of all outside-service spending, plus per-unit breakdowns. Can add outside-service cost entries (vendor, cost, invoice #, date, notes, invoice photo) to *existing* open tickets. Cannot open new tickets, close tickets, or access anything else. |
+
+## Costs tab (F&B Manager, Superadmin, and Accounting)
+
+- **F&B Manager/Superadmin** see this as a third tab, alongside Dashboard and Admin Panel
+- **Accounting** sees this as their entire experience — logging in goes straight here, nothing else
+- Shows a site-wide all-time total at the top, then every unit with logged costs (open or closed tickets), sorted highest-spend first
+- Clicking a unit opens its ticket — Accounting can add a new outside-service call (now including an optional invoice photo) but can't open a brand-new ticket or close one; if a unit has no ticket yet, Accounting sees a message explaining only F&B Manager/Superadmin can start one
+- **"Repeat Repairs" section** — sits above the per-unit list, showing any unit with 2+ maintenance tickets ever (open or closed), sorted worst-first. This is computed independently of cost data, so it still catches units with repeat in-house repairs even if no outside-service cost was ever logged.
+- **Dashboard cards flag it too** — any unit with 2+ tickets ever shows a red "⚠️ Repeat repairs — Xx on record" badge, so F&B Manager can spot chronic problem equipment (candidates for replacement rather than another repair) without needing to dig through history.
 
 Every role's person record has separate First Name / Last Name fields, plus email, phone, and PIN.
 
@@ -65,6 +75,20 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 - Due/overdue assigned tasks show only on that worker's "Scheduled PM Due" list; unassigned ones show to everyone
 - Marking a task done logs it to the unit's history and resets the countdown
 
+## Alerts & Incidents — now ticket-aware
+
+- Each incident row shows **Booth first** (bold), equipment name second — matching the "location leads" convention used elsewhere
+- **"Open" button** (F&B Manager/Superadmin only) — for any unresolved incident with no maintenance ticket yet, opens the Mark for Maintenance form pre-filled with the failure reason as the description
+- **"View Ticket" button** — if a ticket already exists for that unit, takes you straight to it instead
+- **Status is ticket-aware** — shows "Ticket Open" once a ticket exists (not just "Open"), and only shows "Resolved" once a later good check is logged. It stays visible and actionable until a Maintenance worker or F&B Manager actually closes the ticket — not just whenever the readings happen to look fine again on their own.
+
+## Service ID (tag/serial number)
+
+- Each unit has a **Service ID** field (e.g. "RB-014" for Rufus Brubaker-serviced units, or "PARF-014" by site) — settable directly via Edit
+- **If a unit doesn't have one yet, every routine check prompts for it** (required field) until it's entered once — after that, it's saved permanently and won't ask again
+- This applies in both the User's check form and the F&B Manager's Log Entry modal
+- The Dashboard card shows the Service ID once recorded, or a red "Service ID not recorded yet" flag if it's still missing — an easy way to see which units still need this filled in
+
 ## Compliance tracking
 
 - Tracks three things per check: **temperature**, **fans**, and **compressor** — a compressor-down reading counts as out-of-compliance the same way fans-down does, across the card, reports, and the compliance streak
@@ -91,15 +115,25 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 
 In the Site Users panel:
 - **Download CSV** — exports the current site's Site Users (name, email, phone, role, PIN) as a file, useful as a backup before making bulk changes
+- **Download Template** — downloads a blank example file with 3 sample rows showing the expected format, for building a fresh import from scratch
 - **Import from CSV** — same paste-or-upload pattern as equipment import. Columns: `FirstName,LastName,Email,Phone,Role,PIN` (Role should read "User", "F&B Manager", or "Maintenance"; leave PIN blank to auto-generate one)
 - **Delete All Site Users** (Superadmin only) — wipes every F&B Manager/User/Maintenance account at the current site in one action, with two confirmation prompts since it can't be undone. **Superadmins and Lancelot Management accounts are never touched by this** — it only ever affects site-scoped people.
 
-In the Unit Assignments panel:
-- **Delete All Units** (Superadmin only) — wipes every unit at the current site, along with all their history, maintenance tickets, and PM tasks, behind two confirmation prompts. Use this to get a clean slate before re-importing corrected equipment data via CSV.
+In a combined **Danger Zone** panel (Superadmin only, red-bordered, at the bottom of Admin Panel):
+- **Delete All Site Users** — wipes every F&B Manager/User/Maintenance account at the current site, behind two confirmation prompts. Superadmins and Lancelot Management are never touched.
+- **Delete All Units** — wipes every unit at the current site, along with all their history, maintenance tickets, and PM tasks, behind two confirmation prompts. Use this to get a clean slate before re-importing corrected equipment data via CSV.
+
+**Note:** if a unit's Type field seemed to silently revert after editing — this was a real bug from equipment categories being expanded (old units still had the retired "cooler"/"freezer" values, which didn't match any current dropdown option). This is now auto-migrated to the new categories the moment the app loads, so it shouldn't happen going forward.
 
 ## CSV Import (bulk-create units)
 
-F&B Manager/Superadmin see an **"Import from CSV"** button next to Add Unit. Paste CSV content or upload a file with this column layout:
+F&B Manager/Superadmin see **"Import from CSV"** and **"Download Template"** buttons next to Add Unit.
+
+**Download Template** generates a ready-to-fill CSV:
+- If the site already has units, it pre-fills one row per existing Location/Booth (equipment columns left blank) — ready to fill in equipment for each known location
+- If the site has no units yet, it downloads a blank example instead, showing the expected format with two sample rows
+
+Paste CSV content or upload a file with this column layout:
 
 ```
 location,Equipment,Equipment,Equipment,...
@@ -114,10 +148,9 @@ Mansion,Upright Refrigerator #1,Upright Refrigerator #2,,
 
 ## Unit assignment & the User checklist
 
-- **Add/remove people directly on the card** — F&B Manager and Superadmin see each unit's assigned people as small removable chips right on the Dashboard card, with a "+ Add person…" dropdown underneath. No need to open Edit or the Admin Panel for quick changes.
-- **Multiple Users can be assigned to the same unit** — same options available in the Unit Assignments panel and the unit's Edit form too (multi-select, Ctrl/Cmd+click or tap multiple on mobile)
+- **Add/remove people directly on the card** — F&B Manager and Superadmin see each unit's assigned people as small removable chips right on the Dashboard card, with a "+ Add person…" dropdown underneath. This is now the *only* place to manage unit assignments — the separate Unit Assignments panel was removed as redundant.
+- **Multiple Users can be assigned to the same unit** — same multi-select works from the unit's Edit form too (Ctrl/Cmd+click or tap multiple on mobile), in addition to the card chips
 - **First one to log a check clears it for everyone** — since "checked today" is tracked per-unit, not per-person, as soon as any assigned User logs a check, that unit disappears from every other assigned User's list too, not just theirs
-- **Unit Assignments panel** (Admin Panel tab) — every unit at the site listed with the same chip style as the Dashboard cards: assigned people shown as removable chips (click × to remove), with a "+ Add person…" dropdown underneath. Unassigned units float to the top and are flagged in red.
 - Users no longer see the full unit grid or a scrollable list — logging in shows the cascading Booth→Equipment check form described above under "User check-logging form"
 - **Booth field** — each unit now has a separate Booth field (in addition to Location) specifically for grouping equipment that belongs to the same booth. Typing suggests existing booth names as you type (autocomplete), so reusing the exact same name is easy instead of risking a typo creating a duplicate group. Existing units will need this filled in via Edit before they group meaningfully — until then they fall back to grouping by Location, then "Ungrouped."
 - **Equipment types expanded** — the Type dropdown now matches real categories: Walk-in Cooler, Walk-in Freezer, Upright Refrigerator, Upright Freezer, Chest Freezer, Bain Marie, Glycol Chiller, or Other (previously just Cooler/Freezer/Bain Marie). Existing units keep their old type value until edited — worth a pass through Edit on each one alongside setting its Booth.
@@ -154,4 +187,3 @@ Submitting clears that equipment from the dropdowns immediately and resets the f
 - Faire QC Tracker: https://foodqc.lancelotbiz.com/
 - Faire Punch List: https://punchlist.lancelotbiz.com/
 - Shared legal pages (for trackers with SMS programs): https://legal.lancelotbiz.com/
-
