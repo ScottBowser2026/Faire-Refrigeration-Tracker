@@ -103,9 +103,10 @@
   .card-actions .btn{ flex:1; }
 
   .alert-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:13.5px; }
-  .checklist-row{ display:flex; justify-content:space-between; align-items:center; gap:12px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; margin-bottom:10px; }
-  .checklist-row .name{ font-weight:700; font-size:15px; }
-  .checklist-row .loc{ font-family:var(--mono); font-size:11px; color:#888; }
+  .checklist-row{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .checklist-row:last-child{ border-bottom:none; }
+  .checklist-row .name{ font-weight:600; font-size:13.5px; }
+  .checklist-row .loc{ font-family:var(--mono); font-size:11px; color:#888; margin-left:6px; }
   .assign-row{ display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:13.5px; }
   .assign-row.unassigned{ background:rgba(164,64,47,.06); }
   .assign-row select{ flex-shrink:0; min-width:160px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; }
@@ -130,6 +131,8 @@
   .entry-maintenance{ background:var(--maint-bg); color:var(--maint); }
   .entry-repair{ background:var(--flag-bg); color:var(--flag); }
   .entry-cleaning{ background:#e3ede1; color:var(--ok); }
+  .entry-off{ background:var(--unset-bg); color:#555; }
+  .status-off{ background:var(--unset-bg); color:#555; }
 
   .toast{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--steel-2); color:var(--paper); padding:11px 18px; border-radius:8px; font-size:13.5px; opacity:0; pointer-events:none; transition:all .25s; z-index:200; }
   .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
@@ -242,7 +245,7 @@
   <!-- USER CHECKLIST VIEW (User/crew role only — replaces the dashboard above) -->
   <div id="userWorkerView" style="display:none">
     <div class="section-head"><h2>My Units to Check</h2><span class="hint">Assigned to you · resets each day as you log checks</span></div>
-    <div id="userWorkerList"></div>
+    <div class="panel" id="userWorkerList"></div>
   </div>
 
   <!-- MAINTENANCE TICKETS OVERVIEW (F&B Manager / Superadmin only) -->
@@ -367,7 +370,7 @@
     </div>
     <div class="field"><label>Location</label><input type="text" id="u_location"></div>
     <div class="field"><label>Stock / contents</label><input type="text" id="u_stock"></div>
-    <div class="field"><label>Assigned User <span class="hint">(who's responsible for daily checks)</span></label><select id="u_assigned_user"></select></div>
+    <div class="field"><label>Assigned Users <span class="hint">(any of them can check it — first one to log it clears it for everyone)</span></label><select id="u_assigned_user" multiple size="4" style="height:auto;"></select></div>
     <div class="two-col">
       <div class="field"><label>Target min °F</label><input type="text" id="u_tmin"></div>
       <div class="field"><label>Target max °F</label><input type="text" id="u_tmax"></div>
@@ -479,6 +482,7 @@
         <option value="maintenance">Maintenance</option>
         <option value="repair">Repair</option>
         <option value="cleaning">Cleaning</option>
+        <option value="off">Unit is off</option>
       </select>
     </div>
     <div id="tempFieldsWrap">
@@ -743,7 +747,7 @@ async function loadSiteData(siteKey){
 
   const unitsSnap = await siteRef('units', siteKey).once('value');
   units = objToArray(unitsSnap.val());
-  units.forEach(u=>{ if(!u.history) u.history=[]; });
+  units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } });
 
   const recSnap = await siteRef('notifyRecipients', siteKey).once('value');
   recipients = recSnap.exists() ? objToArray(recSnap.val()) : [];
@@ -752,7 +756,7 @@ async function loadSiteData(siteKey){
   dailyReports = drSnap.exists() ? objToArray(drSnap.val()) : [];
 
   unitsListenerRef = siteRef('units', siteKey);
-  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
+  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
   recipientsListenerRef = siteRef('notifyRecipients', siteKey);
   recipientsListenerRef.on('value', snap=>{ recipients = snap.exists()?objToArray(snap.val()):[]; renderRecipientList(); });
   dailyReportsListenerRef = siteRef('dailyReports', siteKey);
@@ -766,7 +770,9 @@ async function persistRecipients(){ await siteRef('notifyRecipients').set(arrayT
 async function persistDailyReports(){ await siteRef('dailyReports').set(arrayToObj(dailyReports)); }
 async function persistSuperadmins(){ await refSuperadmins.set(arrayToObj(superadmins)); }
 
+function isMarkedOffToday(u){ return u.markedOffAt && localDateKeyFor(u.markedOffAt)===localDateKey(); }
 function statusOf(u){
+  if(isMarkedOffToday(u)) return "off";
   if(u.currentTemp===null||u.currentTemp===undefined||u.fansOperating===null||u.fansOperating===undefined) return "unset";
   if(u.fansOperating===false) return "flag";
   if(u.currentTemp<u.tmin||u.currentTemp>u.tmax) return "flag";
@@ -985,13 +991,14 @@ function render(){
   document.getElementById('statFlag').textContent = units.filter(u=>statusOf(u)==='flag').length;
   document.getElementById('statUnset').textContent = units.filter(u=>statusOf(u)==='unset').length;
   document.getElementById('statTotal').textContent = units.length;
-  const checkedOnSchedule = units.filter(u=>!neverChecked(u) && !isStale(u)).length;
-  document.getElementById('statCheckedPct').textContent = units.length ? Math.round((checkedOnSchedule/units.length)*100)+'%' : '—';
+  const eligibleForChecking = units.filter(u=>!isMarkedOffToday(u));
+  const checkedOnSchedule = eligibleForChecking.filter(u=>!neverChecked(u) && !isStale(u)).length;
+  document.getElementById('statCheckedPct').textContent = eligibleForChecking.length ? Math.round((checkedOnSchedule/eligibleForChecking.length)*100)+'%' : '—';
   if(list.length===0){ grid.innerHTML = `<div style="color:#888; font-size:13.5px; padding:20px 0;">No units match this filter.</div>`; return; }
   grid.innerHTML = list.map(u=>{
     const st = statusOf(u);
-    const badgeClass = st==='ok'?'status-ok':st==='flag'?'status-flag':'status-unset';
-    const badgeLabel = st==='ok'?'OK':st==='flag'?'FLAGGED':'UNCHECKED';
+    const badgeClass = st==='ok'?'status-ok':st==='flag'?'status-flag':st==='off'?'status-off':'status-unset';
+    const badgeLabel = st==='ok'?'OK':st==='flag'?'FLAGGED':st==='off'?'OFF':'UNCHECKED';
     const comp = complianceStats(u);
     let compHtml = '';
     if(comp.streakGood===true) compHtml = `<div class="card-compliance good">${comp.streakDays} day${comp.streakDays===1?'':'s'} in compliance</div>`;
@@ -1010,7 +1017,7 @@ function render(){
       ${ticketBadgeHtml}
       ${pmBadgeHtml}
       <div class="card-last">${neverChecked(u)?'Never checked':`Last: ${fmtDate(u.lastCheckAt)} · ${escapeHtml(u.lastCheckBy||'')}`}</div>
-      <div class="card-last">${u.assignedUserName?`Assigned to: ${escapeHtml(u.assignedUserName)}`:'Unassigned'}</div>
+      <div class="card-last">${(u.assignedUserNames&&u.assignedUserNames.length)?`Assigned to: ${u.assignedUserNames.map(n=>escapeHtml(n)).join(', ')}`:'Unassigned'}</div>
       <div class="card-actions">
         <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log entry</button>
         <button class="btn btn-outline btn-small" onclick="openHistoryModal('${u.id}')">History</button>
@@ -1164,18 +1171,15 @@ function renderMaintenanceWorkerList(){
 function renderUserWorkerList(){
   const wrap = document.getElementById('userWorkerList'); if(!wrap) return;
   if(!isUserRole()) return;
-  const myUnits = units.filter(u=>u.assignedUserId===currentUserId && !isCheckedToday(u));
+  const myUnits = units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isCheckedToday(u) && !isMarkedOffToday(u));
   if(myUnits.length===0){
-    wrap.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">${units.some(u=>u.assignedUserId===currentUserId) ? "All your assigned units are checked for today — nice work!" : "No units are assigned to you yet — ask your F&B Manager."}</div>`;
+    wrap.innerHTML = `<div style="color:#888; font-size:13.5px;">${units.some(u=>(u.assignedUserIds||[]).includes(currentUserId)) ? "All your assigned units are checked for today — nice work!" : "No units are assigned to you yet — ask your F&B Manager."}</div>`;
     return;
   }
   const sorted = myUnits.slice().sort((a,b)=>a.name.localeCompare(b.name));
   wrap.innerHTML = sorted.map(u=>`
     <div class="checklist-row">
-      <div>
-        <div class="name">${escapeHtml(u.name)}</div>
-        <div class="loc">${escapeHtml(u.location||'')}</div>
-      </div>
+      <div><span class="name">${escapeHtml(u.name)}</span><span class="loc">${escapeHtml(u.location||'')}</span></div>
       <button class="btn btn-primary btn-small" onclick="openCheckModal('${u.id}')">Log Check</button>
     </div>`).join('');
 }
@@ -1320,35 +1324,37 @@ function renderUnitAssignments(){
   const users = usersWithRole('crew');
   if(units.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13px; padding:6px 0;">No units at this site yet.</div>`; return; }
   const sorted = units.slice().sort((a,b)=>{
-    const aUn = !a.assignedUserId, bUn = !b.assignedUserId;
+    const aUn = !(a.assignedUserIds&&a.assignedUserIds.length), bUn = !(b.assignedUserIds&&b.assignedUserIds.length);
     if(aUn!==bUn) return aUn ? -1 : 1; // unassigned units float to the top
     return a.name.localeCompare(b.name);
   });
-  wrap.innerHTML = sorted.map(u=>`
-    <div class="assign-row ${!u.assignedUserId?'unassigned':''}">
+  wrap.innerHTML = sorted.map(u=>{
+    const ids = u.assignedUserIds||[];
+    return `<div class="assign-row ${ids.length===0?'unassigned':''}">
       <div style="flex:1;">
         <b>${escapeHtml(u.name)}</b>
         <span style="color:#888; font-size:12px;"> (${escapeHtml(u.location||'')})</span>
-        ${!u.assignedUserId?'<span style="color:var(--flag); font-size:11.5px; margin-left:6px;">UNASSIGNED</span>':''}
+        ${ids.length===0?'<span style="color:var(--flag); font-size:11.5px; margin-left:6px;">UNASSIGNED</span>':''}
       </div>
-      <select onchange="updateUnitAssignment('${u.id}', this.value)">
-        <option value="">Unassigned</option>
-        ${users.map(usr=>`<option value="${usr.id}" ${u.assignedUserId===usr.id?'selected':''}>${escapeHtml(fullName(usr))}</option>`).join('')}
+      <select multiple size="3" style="height:auto;" onchange="updateUnitAssignment('${u.id}', Array.from(this.selectedOptions).map(o=>o.value))">
+        ${users.map(usr=>`<option value="${usr.id}" ${ids.includes(usr.id)?'selected':''}>${escapeHtml(fullName(usr))}</option>`).join('')}
       </select>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
-async function updateUnitAssignment(unitId, userId){
+async function updateUnitAssignment(unitId, userIds){
   const u = units.find(x=>x.id===unitId); if(!u) return;
-  const user = userId ? usersWithRole('crew').find(x=>x.id===userId) : null;
-  u.assignedUserId = userId || null;
-  u.assignedUserName = user ? fullName(user) : null;
+  const users = userIds.map(id=>usersWithRole('crew').find(x=>x.id===id)).filter(Boolean);
+  u.assignedUserIds = userIds;
+  u.assignedUserNames = users.map(usr=>fullName(usr));
   await persistUnits(); render(); renderUnitAssignments(); renderUserWorkerList();
-  toast(user ? `${u.name} assigned to ${fullName(user)}.` : `${u.name} is now unassigned.`);
+  toast(users.length ? `${u.name} assigned to ${users.map(usr=>fullName(usr)).join(', ')}.` : `${u.name} is now unassigned.`);
 }
-function populateAssignedUserSelect(currentAssignedId){
+function populateAssignedUserSelect(currentAssignedIds){
   const sel = document.getElementById('u_assigned_user');
   const users = usersWithRole('crew');
-  sel.innerHTML = `<option value="">Unassigned</option>` + users.map(u=>`<option value="${u.id}" ${currentAssignedId===u.id?'selected':''}>${escapeHtml(fullName(u))}</option>`).join('');
+  const ids = currentAssignedIds || [];
+  sel.innerHTML = users.map(u=>`<option value="${u.id}" ${ids.includes(u.id)?'selected':''}>${escapeHtml(fullName(u))}</option>`).join('');
 }
 function openAddModal(){
   editingUnitId=null;
@@ -1356,7 +1362,7 @@ function openAddModal(){
   document.getElementById('deleteUnitBtn').style.display='none';
   ['u_name','u_location','u_stock','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('u_type').value='cooler'; document.getElementById('u_runtime').value='always';
-  populateAssignedUserSelect(null);
+  populateAssignedUserSelect([]);
   document.getElementById('unitOverlay').classList.add('show');
 }
 function openEditModal(unitId){
@@ -1371,7 +1377,7 @@ function openEditModal(unitId){
   document.getElementById('u_stock').value=u.stock||'';
   document.getElementById('u_tmin').value=u.tmin!=null?u.tmin:'';
   document.getElementById('u_tmax').value=u.tmax!=null?u.tmax:'';
-  populateAssignedUserSelect(u.assignedUserId||null);
+  populateAssignedUserSelect(u.assignedUserIds||[]);
   document.getElementById('unitOverlay').classList.add('show');
 }
 function closeUnitModal(){ document.getElementById('unitOverlay').classList.remove('show'); }
@@ -1380,14 +1386,14 @@ async function saveUnit(){
   if(!name){ toast('Enter a name.'); return; }
   const tmin = parseFloat(document.getElementById('u_tmin').value);
   const tmax = parseFloat(document.getElementById('u_tmax').value);
-  const assignedId = document.getElementById('u_assigned_user').value;
-  const assignedUser = assignedId ? usersWithRole('crew').find(x=>x.id===assignedId) : null;
+  const assignedIds = Array.from(document.getElementById('u_assigned_user').selectedOptions).map(o=>o.value);
+  const assignedUsers = assignedIds.map(id=>usersWithRole('crew').find(x=>x.id===id)).filter(Boolean);
   const data = { name, type:document.getElementById('u_type').value, runtime:document.getElementById('u_runtime').value,
     location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
-    tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserId: assignedId||null, assignedUserName: assignedUser?fullName(assignedUser):null };
+    tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
   if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); Object.assign(u,data); }
   else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
-  await persistUnits(); closeUnitModal(); render(); renderFleetChart(); renderUserWorkerList(); toast('Saved.');
+  await persistUnits(); closeUnitModal(); render(); renderFleetChart(); renderUserWorkerList(); renderUnitAssignments(); toast('Saved.');
 }
 document.getElementById('deleteUnitBtn').addEventListener('click', async ()=>{
   if(!editingUnitId) return;
@@ -1430,6 +1436,12 @@ async function saveCheck(){
     u.currentTemp=temp; u.fansOperating=fans; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
     if(!u.history) u.history=[];
     u.history.push({ at:u.lastCheckAt, temp, fans, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
+  } else if(type==='off'){
+    if(!confirm(`Confirm: mark "${u.name}" as OFF for today? It won't need a compliance check until tomorrow.`)) return;
+    const offAt = new Date().toISOString();
+    u.markedOffAt = offAt; u.markedOffBy = currentUser;
+    if(!u.history) u.history=[];
+    u.history.push({ at:offAt, temp:null, fans:null, notes: notes||'Marked off for the day', photo:photoDataUrl, by:currentUser, entryType:'off' });
   } else {
     if(!notes){ toast('Add a note describing what was done.'); return; }
     if(!u.history) u.history=[];
@@ -1438,7 +1450,7 @@ async function saveCheck(){
     u.history.push(entry);
   }
   await persistUnits(); closeCheckModal(); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList();
-  toast(type==='check'?'Check logged.':`${type[0].toUpperCase()+type.slice(1)} note logged.`);
+  toast(type==='check'?'Check logged.':type==='off'?`${u.name} marked off for today.`:`${type[0].toUpperCase()+type.slice(1)} note logged.`);
 }
 
 function dayKey(iso){ const d=new Date(iso); return d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'}); }
@@ -1500,7 +1512,7 @@ function renderHistoryBody(){
 function closeHistoryModal(){ document.getElementById('historyOverlay').classList.remove('show'); }
 function openLightbox(src){ const w=window.open('','_blank'); w.document.write(`<img src="${src}" style="max-width:100%">`); }
 
-function notCheckedList(){ return visibleUnits().filter(u=>neverChecked(u)||isStale(u)); }
+function notCheckedList(){ return visibleUnits().filter(u=>(neverChecked(u)||isStale(u)) && !isMarkedOffToday(u)); }
 function openReportModal(){
   const list = notCheckedList();
   const body = document.getElementById('reportBody');
@@ -1538,7 +1550,7 @@ function complianceReasons(u){
 }
 function openMasterReportModal(){
   const outOfCompliance = units.filter(u=>statusOf(u)==='flag');
-  const notChecked = units.filter(u=>neverChecked(u)||isStale(u));
+  const notChecked = units.filter(u=>(neverChecked(u)||isStale(u)) && !isMarkedOffToday(u));
   const okCount = units.length - outOfCompliance.length - notChecked.filter(u=>statusOf(u)!=='flag').length;
   const body = document.getElementById('masterReportBody');
   const section=(title,list,color,line)=> list.length ? `<div style="margin-bottom:14px;">
@@ -1553,7 +1565,7 @@ function openMasterReportModal(){
 function closeMasterReportModal(){ document.getElementById('masterReportOverlay').classList.remove('show'); }
 async function sendMasterReport(){
   const outOfCompliance = units.filter(u=>statusOf(u)==='flag');
-  const notChecked = units.filter(u=>neverChecked(u)||isStale(u));
+  const notChecked = units.filter(u=>(neverChecked(u)||isStale(u)) && !isMarkedOffToday(u));
   const okCount = units.length - outOfCompliance.length - notChecked.filter(u=>statusOf(u)!=='flag').length;
   const lines=[`OUT OF COMPLIANCE (${outOfCompliance.length}):`];
   if(outOfCompliance.length===0) lines.push('  none');
@@ -1571,7 +1583,7 @@ document.getElementById('masterReportBtn').addEventListener('click', openMasterR
 function localDateKey(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 async function submitDailyReport(){
   const flagged = units.filter(u=>statusOf(u)==='flag').map(u=>({ name:u.name, location:u.location||'', reasons: complianceReasons(u).join(', ')||'flagged' }));
-  const notChecked = units.filter(u=>neverChecked(u)||isStale(u)).map(u=>({ name:u.name, location:u.location||'' }));
+  const notChecked = units.filter(u=>(neverChecked(u)||isStale(u)) && !isMarkedOffToday(u)).map(u=>({ name:u.name, location:u.location||'' }));
   const compliant = units.length - flagged.length - notChecked.length;
   if(!confirm(`Submit today's report for ${SITES[currentSite].name}? ${flagged.length} flagged, ${notChecked.length} not checked, ${compliant} compliant.`)) return;
   const report = {
@@ -1819,7 +1831,7 @@ async function persistLancelotMgmt(){ await refLancelotMgmt.set(arrayToObj(lance
 
 function complianceStatsForUnits(unitList){
   const ok = unitList.filter(u=>statusOf(u)==='ok').length;
-  const withData = unitList.filter(u=>statusOf(u)!=='unset').length;
+  const withData = unitList.filter(u=>{ const s=statusOf(u); return s!=='unset' && s!=='off'; }).length;
   return withData ? Math.round((ok/withData)*100) : null;
 }
 function renderLancelotSummary(){
@@ -1827,8 +1839,9 @@ function renderLancelotSummary(){
   grid.innerHTML = SITE_ORDER.map(key=>{
     const unitList = siteUnitsCache[key] || [];
     const compliancePct = complianceStatsForUnits(unitList);
-    const checkedOnSchedule = unitList.filter(u=>!neverChecked(u) && !isStale(u)).length;
-    const checkingCompliancePct = unitList.length ? Math.round((checkedOnSchedule/unitList.length)*100) : null;
+    const eligibleForChecking = unitList.filter(u=>!isMarkedOffToday(u));
+    const checkedOnSchedule = eligibleForChecking.filter(u=>!neverChecked(u) && !isStale(u)).length;
+    const checkingCompliancePct = eligibleForChecking.length ? Math.round((checkedOnSchedule/eligibleForChecking.length)*100) : null;
     let totalChecks = 0, openTickets = 0, closedTickets = 0, pmCompleted = 0, pmTracked = 0, totalCost = 0;
     unitList.forEach(u=>{
       (u.history||[]).forEach(h=>{ if(!h.entryType || h.entryType==='check') totalChecks++; });
