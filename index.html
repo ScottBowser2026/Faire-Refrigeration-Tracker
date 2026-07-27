@@ -735,9 +735,14 @@ const SITES = {
   parf: { key:'parf', name:'Pennsylvania Renaissance Faire (PARF)' },
   srf:  { key:'srf',  name:"Scarborough Renaissance Faire (SRF)" },
   krf:  { key:'krf',  name:"King Richard's Faire (KRF)" },
-  garf: { key:'garf', name:'Georgia Renaissance Faire (GARF)' }
+  garf: { key:'garf', name:'Georgia Renaissance Faire (GARF)' },
+  test: { key:'test', name:'Test / Sandbox (Superadmin only)' }
 };
+// SITE_ORDER = real properties only. Used for Lancelot Management's snapshot and the All
+// Faires people list, so test/sandbox data never pollutes those real cross-site reports.
 const SITE_ORDER = ['parf','srf','krf','garf'];
+// SUPERADMIN_SITE_ORDER = everything a Superadmin can switch to, including the sandbox.
+const SUPERADMIN_SITE_ORDER = ['parf','srf','krf','garf','test'];
 
 // ===================== FIREBASE CONFIG (same project as before) =====================
 const firebaseConfig = {
@@ -854,7 +859,7 @@ async function loadSuperadmins(){
 }
 
 async function loadAllSiteUsersForLogin(){
-  for(const key of SITE_ORDER){
+  for(const key of SUPERADMIN_SITE_ORDER){
     const initialSnap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
     let needsPersist = false;
     siteUsersCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()).map(p=>{
@@ -863,7 +868,7 @@ async function loadAllSiteUsersForLogin(){
     }) : [];
     if(needsPersist) await db.ref('refrigeration/sites/'+key+'/users').set(arrayToObj(siteUsersCache[key]));
   }
-  for(const key of SITE_ORDER){
+  for(const key of SUPERADMIN_SITE_ORDER){
     db.ref('refrigeration/sites/'+key+'/users').on('value', snap=>{
       siteUsersCache[key] = snap.exists() ? objToArray(snap.val()).map(migratePersonRecord) : [];
       renderAllSitesOverview();
@@ -901,7 +906,7 @@ function findLoginMatch(pin){
   if(sa) return { role:'superadmin', user:sa, site:null };
   const lm = lancelotMgmt.find(u=>String(u.pin)===pin);
   if(lm) return { role:'lancelot', user:lm, site:null };
-  for(const key of SITE_ORDER){
+  for(const key of SUPERADMIN_SITE_ORDER){
     const match = (siteUsersCache[key]||[]).find(u=>String(u.pin)===pin);
     if(match) return { role:match.role||'crew', user:match, site:key };
   }
@@ -989,7 +994,7 @@ function renderRoleControls(){
     const roleClass_ = currentRole==='superadmin'?'role-superadmin':roleClass(currentRole);
     let switcherHtml = '';
     if(isSuperadmin()){
-      switcherHtml = `<div class="site-switcher"><select id="siteSwitcher">${SITE_ORDER.map(k=>`<option value="${k}" ${k===currentSite?'selected':''}>${SITES[k].name}</option>`).join('')}</select></div>`;
+      switcherHtml = `<div class="site-switcher"><select id="siteSwitcher">${SUPERADMIN_SITE_ORDER.map(k=>`<option value="${k}" ${k===currentSite?'selected':''}>${SITES[k].name}</option>`).join('')}</select></div>`;
     }
     whoBox.innerHTML = `${switcherHtml}<span class="role-pill ${roleClass_}">${roleLabel_}</span>
       <span style="font-weight:600;">${escapeHtml(currentUser)}</span>
@@ -1161,7 +1166,7 @@ async function sendForgotPin(){
   const saMatch = superadmins.find(u=>u.email && u.email.trim().toLowerCase()===email);
   if(saMatch){ found = { scope:'superadmin', record: saMatch }; }
   if(!found){
-    for(const key of SITE_ORDER){
+    for(const key of SUPERADMIN_SITE_ORDER){
       const list = siteUsersCache[key] || [];
       const m = list.find(u=>u.email && u.email.trim().toLowerCase()===email);
       if(m){ found = { scope:'site', siteKey:key, record:m }; break; }
@@ -2456,7 +2461,7 @@ async function removeSuperadmin(id){
 function isPinTakenAnywhere(pin, excludeId){
   if(superadmins.some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
   if(lancelotMgmt.some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
-  for(const key of SITE_ORDER){
+  for(const key of SUPERADMIN_SITE_ORDER){
     if((siteUsersCache[key]||[]).some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
   }
   return false;
