@@ -474,6 +474,14 @@
       <button class="btn btn-danger" id="deleteUnitBtn" style="display:none">Delete</button>
       <button class="btn btn-primary" onclick="saveUnit()">Save</button>
     </div>
+    <div id="unitDangerZone" style="display:none; border-top:1px solid var(--border); margin-top:16px; padding-top:14px;">
+      <div style="font-weight:700; font-size:13px; margin-bottom:2px; color:var(--flag);">Danger Zone <span class="hint" style="color:#888;">(Superadmin only — this unit only, cannot be undone)</span></div>
+      <div style="font-size:12.5px; color:#888; margin-bottom:8px;">Use this instead of deleting the whole unit when you just need to wipe a bad entry or start its record over.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-danger btn-small" id="resetUnitStatusBtn">Reset Current Status</button>
+        <button class="btn btn-danger btn-small" id="clearUnitHistoryBtn">Clear History</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2183,6 +2191,7 @@ function openAddModal(){
   editingUnitId=null;
   document.getElementById('unitModalTitle').textContent='Add Unit';
   document.getElementById('deleteUnitBtn').style.display='none';
+  document.getElementById('unitDangerZone').style.display='none';
   ['u_name','u_booth','u_location','u_stock','u_service_id','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('u_type').value='cooler'; document.getElementById('u_runtime').value='always';
   populateAssignedUserSelect([]); populateBoothDatalist();
@@ -2193,6 +2202,7 @@ function openEditModal(unitId){
   editingUnitId = unitId;
   document.getElementById('unitModalTitle').textContent='Edit Unit';
   document.getElementById('deleteUnitBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
+  document.getElementById('unitDangerZone').style.display = isSuperadmin() ? 'block' : 'none';
   document.getElementById('u_name').value=u.name||'';
   document.getElementById('u_type').value=u.type||'cooler';
   document.getElementById('u_runtime').value=u.runtime||'always';
@@ -2227,6 +2237,21 @@ document.getElementById('deleteUnitBtn').addEventListener('click', async ()=>{
   units = units.filter(x=>x.id!==editingUnitId);
   await persistUnits(); closeUnitModal(); render(); renderFleetChart(); toast('Unit deleted.');
 });
+document.getElementById('resetUnitStatusBtn').addEventListener('click', async ()=>{
+  if(!editingUnitId || !isSuperadmin()) return;
+  const u = units.find(x=>x.id===editingUnitId); if(!u) return;
+  if(!confirm(`Reset ${u.name}'s current status back to "not checked"? This clears the live temp/fans/compressor reading but keeps its full history. Cannot be undone.`)) return;
+  u.currentTemp=null; u.fansOperating=null; u.compressorOperating=null; u.lastCheckBy=null; u.lastCheckAt=null;
+  await persistUnits(); render(); renderFleetChart(); renderIncidents(); toast(`${u.name}'s status reset.`);
+});
+document.getElementById('clearUnitHistoryBtn').addEventListener('click', async ()=>{
+  if(!editingUnitId || !isSuperadmin()) return;
+  const u = units.find(x=>x.id===editingUnitId); if(!u) return;
+  if(!confirm(`Erase all logged checks, tickets, and PM records for ${u.name}? The unit itself stays, but its entire history disappears. Cannot be undone.`)) return;
+  u.history=[]; u.maintenanceTicket=null; u.clearedIncidents=[]; if(u.pmTasks) u.pmTasks.forEach(t=>{ t.lastCompletedAt=null; });
+  await persistUnits(); render(); renderFleetChart(); renderIncidents(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList(); toast(`${u.name}'s history cleared.`);
+});
+
 
 function openCheckModal(unitId){
   checkingUnitId = unitId;
