@@ -84,6 +84,18 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 - **"View Ticket" button** — if a ticket already exists for that unit, takes you straight to it instead
 - **Status is ticket-aware** — shows "Ticket Open" once a ticket exists (not just "Open"), and only shows "Resolved" once a later good check is logged. It stays visible and actionable until a Maintenance worker or F&B Manager actually closes the ticket — not just whenever the readings happen to look fine again on their own.
 
+## Test / Sandbox site (Superadmin only)
+
+A 5th site, `test`, exists purely for Superadmin to try things — new units, new people, new tickets — without touching real PARF/SRF/KRF/GARF data at all. It works exactly like a real site (own units, own Site Users, own Notify List, own Daily Reports), fully isolated in the database under `refrigeration/sites/test/...`.
+
+- Only appears in the Superadmin's site-switcher dropdown — no one else ever sees it or can log into it unless a Superadmin deliberately adds a test person there
+- **Deliberately excluded** from the Lancelot Management snapshot and the All Faires people list, so test data never skews real cross-site reporting
+- Switch to it anytime via the site-switcher, make changes freely, switch back to a real site when done
+
+## Phone number prompt on login
+
+If someone logs in and has no phone number on file (any role — Superadmin, F&B Manager, User, Maintenance, Accounting, Lancelot Management), a quick prompt appears asking for one. It can be skipped ("Skip for now"), and only asks once per browser session — won't nag on every page reload.
+
 ## Service ID (tag/serial number)
 
 - Each unit has a **Service ID** field (e.g. "RB-014" for Rufus Brubaker-serviced units, or "PARF-014" by site) — settable directly via Edit
@@ -108,10 +120,19 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 - Per-site, admin-managed list of people who receive flagged-unit alerts, not-checked reports, and master reports via EmailJS
 - Not tied to login access
 
+## Add to Home Screen
+
+The app now has a proper icon and app manifest, so it installs as a real home-screen app instead of a plain bookmark:
+- **iPhone (Safari):** tap the Share icon → "Add to Home Screen"
+- **Android (Chrome):** tap the ⋮ menu → "Add to Home Screen" / "Install app"
+
+Opens full-screen with its own icon, no browser address bar.
+
 ## Files
 
 - `index.html` — the entire app (single file)
 - `CNAME` — points this repo at refrigeration.lancelotbiz.com (do not delete)
+- `manifest.json`, `icon-192.png`, `icon-512.png` — enable "Add to Home Screen" as a real app
 
 ## Site Users: CSV export, CSV import, and bulk-delete
 
