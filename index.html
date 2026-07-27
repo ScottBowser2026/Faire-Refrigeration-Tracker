@@ -400,6 +400,7 @@
   <!-- COSTS TAB (F&B Manager/Superadmin as a tab; Accounting's dedicated view) -->
   <div id="costsTabView" style="display:none">
     <div class="section-head"><h2>Repair &amp; Service Costs</h2><span class="hint">All outside-service spending at this site</span></div>
+    <button class="btn btn-primary btn-small" id="addPriorRepairBtn" style="margin-bottom:14px;">Add Prior Repair</button>
     <div class="panel" id="costsTotalPanel" style="margin-bottom:14px;"></div>
     <div class="section-head"><h2>Repeat Repairs</h2><span class="hint">Units with 2+ maintenance tickets ever — possible candidates for replacement</span></div>
     <div id="repeatRepairsList" style="margin-bottom:20px;"></div>
@@ -526,7 +527,13 @@
         <div style="font-weight:700; font-size:13px; margin-bottom:6px; border-top:1px solid var(--border); padding-top:14px;">Outside Service Calls &amp; Costs</div>
         <div id="outsideServiceList" style="max-height:180px; overflow-y:auto; margin-bottom:10px;"></div>
         <div class="two-col">
-          <div class="field"><label>Vendor / company</label><input type="text" id="os_vendor"></div>
+          <div class="field"><label>Vendor / company</label>
+            <select id="os_vendor_select" onchange="document.getElementById('os_vendor_other').style.display = this.value==='__other__' ? 'block' : 'none';">
+              <option value="Rufus Brubaker">Rufus Brubaker</option>
+              <option value="__other__">Other…</option>
+            </select>
+            <input type="text" id="os_vendor_other" placeholder="Vendor name" style="display:none; margin-top:6px;">
+          </div>
           <div class="field"><label>Cost ($)</label><input type="text" id="os_cost" inputmode="decimal"></div>
         </div>
         <div class="two-col">
@@ -627,6 +634,33 @@
       </div>
     </div>
     <div class="modal-actions"><button class="btn btn-outline" onclick="closeUserCsvImportModal()">Close</button></div>
+  </div>
+</div>
+
+<!-- ADD PRIOR REPAIR (backfill historical repairs, Accounting/F&B Manager/Superadmin) -->
+<div class="overlay" id="priorRepairOverlay">
+  <div class="modal" style="max-width:480px;">
+    <h2>Add Prior Repair</h2>
+    <div class="sub">Backfill a repair that happened before this system was tracking it — logs directly to the unit's closed history.</div>
+    <div class="field"><label>Unit</label><select id="pr_unit"></select></div>
+    <div class="field"><label>Vendor / company</label>
+      <select id="pr_vendor_select" onchange="document.getElementById('pr_vendor_other').style.display = this.value==='__other__' ? 'block' : 'none';">
+        <option value="Rufus Brubaker">Rufus Brubaker</option>
+        <option value="__other__">Other…</option>
+      </select>
+      <input type="text" id="pr_vendor_other" placeholder="Vendor name" style="display:none; margin-top:6px;">
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Cost ($)</label><input type="text" id="pr_cost" inputmode="decimal"></div>
+      <div class="field"><label>Service date</label><input type="date" id="pr_date"></div>
+    </div>
+    <div class="field"><label>Invoice / reference #</label><input type="text" id="pr_invoice"></div>
+    <div class="field"><label>Description</label><textarea id="pr_description" rows="2" placeholder="What was repaired…"></textarea></div>
+    <div class="field"><label>Invoice photo (optional)</label><input type="file" id="pr_photo" accept="image/*"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closePriorRepairModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="savePriorRepair()">Save Prior Repair</button>
+    </div>
   </div>
 </div>
 <div class="overlay" id="checkOverlay">
@@ -1363,7 +1397,7 @@ function renderTicketModal(){
         </div>
         ${c.photo?`<img src="${c.photo}" onclick="openLightbox(this.src)" style="width:44px;height:44px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;">`:''}
       </div>`).join('');
-    document.getElementById('os_vendor').value=''; document.getElementById('os_cost').value='';
+    document.getElementById('os_vendor_select').value='Rufus Brubaker'; document.getElementById('os_vendor_other').value=''; document.getElementById('os_vendor_other').style.display='none'; document.getElementById('os_cost').value='';
     document.getElementById('os_date').value=''; document.getElementById('os_invoice').value=''; document.getElementById('os_description').value=''; document.getElementById('os_photo').value='';
     document.getElementById('ticket_close_notes').value='';
   }
@@ -1412,7 +1446,8 @@ async function addTicketEntry(){
 }
 async function addOutsideServiceCall(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
-  const vendor = document.getElementById('os_vendor').value.trim();
+  const vendorSel = document.getElementById('os_vendor_select').value;
+  const vendor = vendorSel==='__other__' ? document.getElementById('os_vendor_other').value.trim() : vendorSel;
   const cost = document.getElementById('os_cost').value.trim();
   const serviceDate = document.getElementById('os_date').value;
   const invoiceRef = document.getElementById('os_invoice').value.trim();
@@ -1595,6 +1630,50 @@ async function submitUserCheck(){
   renderUserWorkerList();
   msg.style.color='var(--ok)'; msg.textContent = `Submitted — ${u.name} cleared from your list.`;
 }
+
+// ---- Add Prior Repair (backfill historical repairs directly into closed history) ----
+function openPriorRepairModal(){
+  const unitSel = document.getElementById('pr_unit');
+  unitSel.innerHTML = units.slice().sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b))||a.name.localeCompare(b.name))
+    .map(u=>`<option value="${u.id}">${escapeHtml(unitGroupKey(u))} — ${escapeHtml(u.name)}</option>`).join('');
+  document.getElementById('pr_vendor_select').value='Rufus Brubaker';
+  document.getElementById('pr_vendor_other').value=''; document.getElementById('pr_vendor_other').style.display='none';
+  document.getElementById('pr_cost').value=''; document.getElementById('pr_date').value='';
+  document.getElementById('pr_invoice').value=''; document.getElementById('pr_description').value=''; document.getElementById('pr_photo').value='';
+  document.getElementById('priorRepairOverlay').classList.add('show');
+}
+function closePriorRepairModal(){ document.getElementById('priorRepairOverlay').classList.remove('show'); }
+async function savePriorRepair(){
+  const unitId = document.getElementById('pr_unit').value;
+  const u = units.find(x=>x.id===unitId); if(!u){ toast('Select a unit.'); return; }
+  const vendorSel = document.getElementById('pr_vendor_select').value;
+  const vendor = vendorSel==='__other__' ? document.getElementById('pr_vendor_other').value.trim() : vendorSel;
+  const cost = document.getElementById('pr_cost').value.trim();
+  const serviceDate = document.getElementById('pr_date').value;
+  const invoiceRef = document.getElementById('pr_invoice').value.trim();
+  const description = document.getElementById('pr_description').value.trim();
+  if(!vendor || !cost){ toast('Enter at least a vendor and cost.'); return; }
+  const photoFile = document.getElementById('pr_photo').files[0];
+  let photoDataUrl = null;
+  if(photoFile){
+    if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; }
+    photoDataUrl = await fileToDataUrl(photoFile);
+  }
+  const now = new Date().toISOString();
+  const backfilledAt = serviceDate ? new Date(serviceDate).toISOString() : now;
+  const ticket = {
+    openedBy: currentUser, openedAt: backfilledAt, reason: `Prior repair (backfilled): ${description||vendor}`,
+    entries: [], outsideServiceCalls: [{ vendor, cost, serviceDate, invoiceRef, description, photo:photoDataUrl, loggedBy:currentUser, at:backfilledAt }],
+    status:'closed', closedBy:currentUser, closedAt: backfilledAt, closeNotes:'Backfilled prior repair record.'
+  };
+  if(!u.maintenanceHistory) u.maintenanceHistory=[];
+  u.maintenanceHistory.push(ticket);
+  await persistUnits();
+  closePriorRepairModal();
+  render(); renderCostsTab();
+  toast(`Prior repair added to ${unitGroupKey(u)} — ${u.name}.`);
+}
+document.getElementById('addPriorRepairBtn').addEventListener('click', openPriorRepairModal);
 
 function renderCostsTab(){
   const totalPanel = document.getElementById('costsTotalPanel');
