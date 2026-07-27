@@ -930,6 +930,10 @@ async function loadSiteData(siteKey){
     const beforeType = u.type;
     migrateUnitType(u);
     if(u.type!==beforeType) unitsNeedPersist = true;
+    if(u.maintenanceTicket){
+      if(!u.maintenanceTicket.entries){ u.maintenanceTicket.entries=[]; unitsNeedPersist=true; }
+      if(!u.maintenanceTicket.outsideServiceCalls){ u.maintenanceTicket.outsideServiceCalls=[]; unitsNeedPersist=true; }
+    }
   });
   if(unitsNeedPersist) await siteRef('units', siteKey).set(arrayToObj(units));
 
@@ -940,7 +944,7 @@ async function loadSiteData(siteKey){
   dailyReports = drSnap.exists() ? objToArray(drSnap.val()) : [];
 
   unitsListenerRef = siteRef('units', siteKey);
-  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } migrateUnitType(u); }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
+  unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } migrateUnitType(u); if(u.maintenanceTicket){ if(!u.maintenanceTicket.entries) u.maintenanceTicket.entries=[]; if(!u.maintenanceTicket.outsideServiceCalls) u.maintenanceTicket.outsideServiceCalls=[]; } }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
   recipientsListenerRef = siteRef('notifyRecipients', siteKey);
   recipientsListenerRef.on('value', snap=>{ recipients = snap.exists()?objToArray(snap.val()):[]; renderRecipientList(); });
   dailyReportsListenerRef = siteRef('dailyReports', siteKey);
@@ -1391,6 +1395,7 @@ async function addTicketEntry(){
   if(!note){ toast('Add a note first.'); return; }
   let photoDataUrl = null;
   if(photoFile){ if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; } photoDataUrl = await fileToDataUrl(photoFile); }
+  if(!u.maintenanceTicket.entries) u.maintenanceTicket.entries = [];
   u.maintenanceTicket.entries.push({ at:new Date().toISOString(), by:currentUser, note, photo:photoDataUrl });
   await persistUnits(); renderTicketModal(); toast('Entry added.');
 }
@@ -1408,6 +1413,7 @@ async function addOutsideServiceCall(){
     if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; }
     photoDataUrl = await fileToDataUrl(photoFile);
   }
+  if(!u.maintenanceTicket.outsideServiceCalls) u.maintenanceTicket.outsideServiceCalls = [];
   u.maintenanceTicket.outsideServiceCalls.push({ vendor, cost, serviceDate, invoiceRef, description, photo:photoDataUrl, loggedBy:currentUser, at:new Date().toISOString() });
   await persistUnits(); renderTicketModal(); renderMaintenanceTicketsOverview(); renderCostsTab(); toast('Outside service call logged.');
 }
