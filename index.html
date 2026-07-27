@@ -498,6 +498,16 @@
 
     <div id="ticketDetailView" style="display:none">
       <div id="ticketReasonDisplay" style="font-size:13.5px; padding:8px 10px; background:var(--maint-bg); border-radius:7px; margin-bottom:8px;"></div>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Progress Status</label>
+        <select id="ticket_progress_status" onchange="updateTicketProgressStatus(this.value)">
+          <option value="">Needs assessment</option>
+          <option value="needs_outside">Needs Outside Service</option>
+          <option value="needs_internal">Needs Internal Service</option>
+          <option value="waiting_part">Waiting on Part</option>
+          <option value="fixed_cooling">Fixed — Cooling</option>
+        </select>
+      </div>
       <div id="ticketAssigneeWrap" style="margin-bottom:12px; display:none;">
         <div style="font-size:12px; color:#888; margin-bottom:4px;">Assigned to</div>
         <div style="display:flex; gap:8px; align-items:center;">
@@ -1226,7 +1236,7 @@ function render(){
     if(comp.streakGood===true) compHtml = `<div class="card-compliance good">${comp.streakDays} day${comp.streakDays===1?'':'s'} in compliance</div>`;
     else if(comp.streakGood===false) compHtml = `<div class="card-compliance bad">${comp.streakDays} day${comp.streakDays===1?'':'s'} out of compliance</div>`;
     const hasTicket = !!u.maintenanceTicket;
-    const ticketBadgeHtml = hasTicket ? `<div class="card-compliance" style="border-color:var(--maint); color:var(--maint);">🔧 Maintenance open — since ${fmtDate(u.maintenanceTicket.openedAt)}</div>` : '';
+    const ticketBadgeHtml = hasTicket ? `<div class="card-compliance" style="border-color:var(--maint); color:var(--maint);">🔧 ${escapeHtml(progressStatusLabel(u.maintenanceTicket.progressStatus))} — since ${fmtDate(u.maintenanceTicket.openedAt)}</div>` : '';
     const ticketBtnHtml = isSiteAdmin() ? `<button class="btn btn-outline btn-small" style="${hasTicket?'border-color:var(--maint); color:var(--maint);':''}" onclick="openTicketModal('${u.id}')">${hasTicket?'Manage Ticket':'Mark for Maintenance'}</button>` : '';
     const duePmTasks = (u.pmTasks||[]).filter(t=>pmDueInfo(t).isDue);
     const pmBadgeHtml = duePmTasks.length>0 ? `<div class="card-compliance bad">🗓️ ${duePmTasks.length} PM task${duePmTasks.length===1?'':'s'} due</div>` : '';
@@ -1317,6 +1327,7 @@ function renderTicketModal(){
   openForm.style.display = 'none'; detailView.style.display = 'block'; closeRow.style.display = 'flex';
   document.getElementById('ticketModalSub').textContent = `Opened ${fmtDate(ticket.openedAt)} by ${ticket.openedBy}`;
   document.getElementById('ticketReasonDisplay').textContent = ticket.reason;
+  document.getElementById('ticket_progress_status').value = ticket.progressStatus || '';
 
   const assigneeWrap = document.getElementById('ticketAssigneeWrap');
   assigneeWrap.style.display = isSiteAdmin() ? 'block' : 'none';
@@ -1417,6 +1428,33 @@ async function addOutsideServiceCall(){
   u.maintenanceTicket.outsideServiceCalls.push({ vendor, cost, serviceDate, invoiceRef, description, photo:photoDataUrl, loggedBy:currentUser, at:new Date().toISOString() });
   await persistUnits(); renderTicketModal(); renderMaintenanceTicketsOverview(); renderCostsTab(); toast('Outside service call logged.');
 }
+function progressStatusLabel(status){
+  return { 'needs_outside':'Needs Outside Service', 'needs_internal':'Needs Internal Service', 'waiting_part':'Waiting on Part', 'fixed_cooling':'Fixed — Cooling' }[status] || 'Needs assessment';
+}
+function progressStatusColor(status){
+  return status==='fixed_cooling' ? 'var(--ok)' : status ? 'var(--maint)' : '#888';
+}
+async function updateTicketProgressStatus(status){
+  const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
+  u.maintenanceTicket.progressStatus = status;
+  if(status==='fixed_cooling'){
+    if(!confirm('Mark as Fixed — Cooling? This will close the ticket and clear it from the queue.')) {
+      u.maintenanceTicket.progressStatus = null;
+      document.getElementById('ticket_progress_status').value = '';
+      return;
+    }
+    const ticket = u.maintenanceTicket;
+    ticket.status='closed'; ticket.closedBy=currentUser; ticket.closedAt=new Date().toISOString(); ticket.closeNotes='Fixed — Cooling (marked via progress status)';
+    if(!u.maintenanceHistory) u.maintenanceHistory=[];
+    u.maintenanceHistory.push(ticket);
+    u.maintenanceTicket = null;
+    await persistUnits(); closeTicketModal(); render(); renderIncidents(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList(); renderCostsTab();
+    toast('Fixed — ticket closed and cleared from the queue.');
+    return;
+  }
+  await persistUnits(); render(); renderIncidents(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList();
+  toast('Status updated.');
+}
 async function closeMaintenanceTicket(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
   if(!confirm('Close this maintenance ticket? It will move to unit history.')) return;
@@ -1438,13 +1476,14 @@ function renderMaintenanceWorkerList(){
     <div class="panel" style="cursor:pointer;" onclick="openTicketModal('${u.id}')">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
         <div>
-          <div style="font-weight:700; font-size:15px;">${escapeHtml(u.name)}</div>
+          <div style="font-weight:700; font-size:15px;">${escapeHtml(unitGroupKey(u))} <span style="font-weight:400; color:#888; font-size:13px;">— ${escapeHtml(u.name)}</span></div>
           <div style="font-family:var(--mono); font-size:11px; color:#888;">${escapeHtml(u.location||'')}</div>
         </div>
         <span class="entry-badge entry-maintenance">open since ${fmtDate(u.maintenanceTicket.openedAt)}</span>
       </div>
       <div style="font-size:13.5px; margin-top:8px;">${escapeHtml(u.maintenanceTicket.reason)}</div>
-      <div style="font-size:12px; color:#888; margin-top:6px;">${(u.maintenanceTicket.entries||[]).length} entr${(u.maintenanceTicket.entries||[]).length===1?'y':'ies'} logged so far</div>
+      <div style="font-size:12px; font-weight:700; color:${progressStatusColor(u.maintenanceTicket.progressStatus)}; margin-top:4px;">${escapeHtml(progressStatusLabel(u.maintenanceTicket.progressStatus))}</div>
+      <div style="font-size:12px; color:#888; margin-top:4px;">${(u.maintenanceTicket.entries||[]).length} entr${(u.maintenanceTicket.entries||[]).length===1?'y':'ies'} logged so far</div>
       ${u.maintenanceTicket.assignedToName?`<div style="font-size:11.5px; color:var(--maint); margin-top:2px;">Assigned to you</div>`:''}
     </div>`).join('');
 }
@@ -1623,7 +1662,8 @@ function renderMaintenanceTicketsOverview(){
     const t = u.maintenanceTicket;
     const totalCost = (t.outsideServiceCalls||[]).reduce((s,c)=>s+(parseFloat(c.cost)||0),0);
     return `<div class="alert-row" style="cursor:pointer;" onclick="openTicketModal('${u.id}')">
-      <div><b>${escapeHtml(u.name)}</b> <span class="meta">(${escapeHtml(u.location||'')})</span><br><span style="font-size:12.5px;">${escapeHtml(t.reason)}</span></div>
+      <div><b>${escapeHtml(unitGroupKey(u))}</b> <span class="meta">— ${escapeHtml(u.name)}</span><br><span style="font-size:12.5px;">${escapeHtml(t.reason)}</span>
+      <div style="font-size:12px; font-weight:700; color:${progressStatusColor(t.progressStatus)}; margin-top:2px;">${escapeHtml(progressStatusLabel(t.progressStatus))}</div></div>
       <div style="text-align:right;"><div class="meta">since ${fmtDate(t.openedAt)}</div>${totalCost>0?`<div style="font-size:12px; font-weight:700; color:var(--maint);">$${totalCost.toFixed(2)} so far</div>`:''}</div>
     </div>`;
   }).join('');
