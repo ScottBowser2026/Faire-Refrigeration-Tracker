@@ -2215,6 +2215,27 @@ function switchHistoryTab(tab){
   historyTab = tab;
   renderHistoryBody();
 }
+function ticketEntriesAsHistory(u){
+  const synth = [];
+  const processTicket = (ticket, isOpen) => {
+    synth.push({ at: ticket.openedAt, by: ticket.openedBy, notes: `Ticket opened: ${ticket.reason}`, entryType:'maintenance', temp:null, fans:null, isTicketEvent:true });
+    (ticket.entries||[]).forEach(e=>{
+      synth.push({ at: e.at, by: e.by, notes: e.note, photo: e.photo||null, entryType:'maintenance', temp:null, fans:null, isTicketEvent:true });
+    });
+    (ticket.outsideServiceCalls||[]).forEach(c=>{
+      synth.push({ at: c.at, by: c.loggedBy, notes: `Outside service — ${c.vendor}: $${c.cost}${c.description?' — '+c.description:''}`, photo:c.photo||null, entryType:'repair', performedBy:'Outside Service Co', temp:null, fans:null, isTicketEvent:true });
+    });
+    if(!isOpen && ticket.closedAt){
+      synth.push({ at: ticket.closedAt, by: ticket.closedBy, notes: `Ticket closed: ${ticket.closeNotes||''}`, entryType:'maintenance', temp:null, fans:null, isTicketEvent:true });
+    }
+  };
+  if(u.maintenanceTicket) processTicket(u.maintenanceTicket, true);
+  (u.maintenanceHistory||[]).forEach(t=>processTicket(t, false));
+  (u.clearedIncidents||[]).forEach(c=>{
+    synth.push({ at: c.clearedAt, by: c.clearedBy, notes: `Report cleared (no ticket): "${c.notes}"`, entryType:'maintenance', temp:null, fans:null, isTicketEvent:true });
+  });
+  return synth;
+}
 function renderHistoryBody(){
   const u = units.find(x=>x.id===historyModalUnitId); if(!u) return;
   const checksBtn = document.getElementById('historyTabChecks');
@@ -2224,11 +2245,14 @@ function renderHistoryBody(){
   maintBtn.style.background = historyTab==='maint' ? 'var(--frost-deep)' : 'var(--card)';
   maintBtn.style.color = historyTab==='maint' ? '#fff' : 'var(--ink)';
 
-  const allHist = (u.history||[]).slice().reverse();
-  const hist = historyTab==='check'
-    ? allHist.filter(h=>!h.entryType || h.entryType==='check')
-    : allHist.filter(h=>h.entryType && h.entryType!=='check');
-  document.getElementById('historySub').textContent = `${hist.length} logged entr${hist.length===1?'y':'ies'} ${historyTab==='check'?'(routine checks)':'(maintenance & repairs)'}`;
+  const allHist = (u.history||[]).slice();
+  let hist;
+  if(historyTab==='check'){
+    hist = allHist.filter(h=>!h.entryType || h.entryType==='check').reverse();
+  } else {
+    hist = allHist.filter(h=>h.entryType && h.entryType!=='check').concat(ticketEntriesAsHistory(u)).sort((a,b)=>new Date(b.at)-new Date(a.at));
+  }
+  document.getElementById('historySub').textContent = `${hist.length} logged entr${hist.length===1?'y':'ies'} ${historyTab==='check'?'(routine checks)':'(maintenance & repairs, including ticket notes)'}`;
   const body = document.getElementById('historyBody');
   if(hist.length===0){ body.innerHTML=`<div style="padding:20px 0; color:#777;">No entries in this tab yet.</div>`; return; }
   const groups=[]; hist.forEach(h=>{ const key=dayKey(h.at); let g=groups.find(x=>x.key===key); if(!g){g={key,entries:[]};groups.push(g);} g.entries.push(h); });
@@ -2436,21 +2460,24 @@ function incidentRowHtml(inc, compact){
   const canAct = isSiteAdmin() && !status.resolved;
   const actionBtn = canAct ? `<button class="btn btn-primary btn-small" style="margin-top:4px;" onclick="openTicketFromIncident('${inc.unitId}', '${inc.reason.replace(/'/g,"\\'")}', '${inc.at}')">${status.hasTicket?'View Ticket':'Open'}</button>` : '';
   const clearedNotesHtml = status.clearedNotes ? `<div style="font-size:11.5px; color:#888; margin-top:2px;">Cleared by ${escapeHtml(status.clearedBy||'—')}: "${escapeHtml(status.clearedNotes)}"</div>` : '';
+  const unitForStatus = units.find(x=>x.id===inc.unitId);
+  const progressHtml = (status.hasTicket && unitForStatus && unitForStatus.maintenanceTicket) ? `<div style="font-size:11.5px; font-weight:700; color:${progressStatusColor(unitForStatus.maintenanceTicket.progressStatus)}; margin-top:2px;">${escapeHtml(progressStatusLabel(unitForStatus.maintenanceTicket.progressStatus))}</div>` : '';
   return `<div class="alert-row">
-    <div><b>${escapeHtml(inc.booth)}</b> <span class="meta">— ${escapeHtml(inc.unit)}</span><br><span style="font-size:12.5px;">${escapeHtml(inc.reason.trim())}</span>${clearedNotesHtml}</div>
+    <div><b>${escapeHtml(inc.booth)}</b> <span class="meta">— ${escapeHtml(inc.unit)}</span><br><span style="font-size:12.5px;">${escapeHtml(inc.reason.trim())}</span>${progressHtml}${clearedNotesHtml}</div>
     <div style="text-align:right;"><div class="meta">${fmtDate(inc.at)}</div><span class="${status.cls}">${status.label}</span>${actionBtn}</div>
   </div>`;
 }
 function renderIncidents(){
-  const all = buildIncidents(); const recent = all.slice(0,6);
+  const all = buildIncidents().filter(inc=>!incidentStatusInfo(inc).resolved);
+  const recent = all.slice(0,6);
   const panel = document.getElementById('incidentsPanel');
-  if(recent.length===0){ panel.innerHTML=`<div style="color:#888; font-size:13.5px;">No incidents recorded yet.</div>`; return; }
+  if(recent.length===0){ panel.innerHTML=`<div style="color:#888; font-size:13.5px;">No active incidents — nothing flagged right now.</div>`; return; }
   panel.innerHTML = recent.map(inc=>incidentRowHtml(inc)).join('');
 }
 function openIncidentsModal(){
-  const all = buildIncidents();
+  const all = buildIncidents().filter(inc=>!incidentStatusInfo(inc).resolved);
   const body = document.getElementById('incidentsFullBody');
-  body.innerHTML = all.length===0 ? `<div style="color:#888; padding:16px 0;">No incidents recorded yet.</div>` : all.map(inc=>incidentRowHtml(inc)).join('');
+  body.innerHTML = all.length===0 ? `<div style="color:#888; padding:16px 0;">No active incidents — nothing flagged right now.</div>` : all.map(inc=>incidentRowHtml(inc)).join('');
   document.getElementById('incidentsOverlay').classList.add('show');
 }
 function closeIncidentsModal(){ document.getElementById('incidentsOverlay').classList.remove('show'); }
