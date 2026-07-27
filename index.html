@@ -1424,14 +1424,21 @@ async function openMaintenanceTicket(){
   const assignee = assigneeId ? maintenanceWorkersAtSite(currentSite).find(w=>w.id===assigneeId) : null;
   u.maintenanceTicket = { openedBy:currentUser, openedAt:new Date().toISOString(), reason, entries:[], outsideServiceCalls:[], assignedToId: assigneeId||null, assignedToName: assignee?fullName(assignee):null };
   await persistUnits(); renderTicketModal(); render(); renderIncidents(); renderMaintenanceWorkerList(); renderCostsTab(); toast(assignee ? `Ticket opened and assigned to ${fullName(assignee)}.` : 'Maintenance ticket opened.');
+  if(assignee && assignee.email && emailReady()){
+    sendEmailTo(assignee.email, 'New maintenance ticket assigned to you', `Hi ${assignee.firstName||fullName(assignee)},\n\nYou've been assigned a maintenance ticket for "${u.name}" at ${unitGroupKey(u)} (${SITES[currentSite].name}).\n\nReason: ${reason}\n\nView it: https://refrigeration.lancelotbiz.com/?unit=${u.id}&view=ticket`);
+  }
 }
 async function reassignTicket(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
   const assigneeId = document.getElementById('ticket_reassign_select').value;
   const assignee = assigneeId ? maintenanceWorkersAtSite(currentSite).find(w=>w.id===assigneeId) : null;
+  const prevAssigneeId = u.maintenanceTicket.assignedToId;
   u.maintenanceTicket.assignedToId = assigneeId || null;
   u.maintenanceTicket.assignedToName = assignee ? fullName(assignee) : null;
   await persistUnits(); render(); renderMaintenanceWorkerList(); toast(assignee ? `Reassigned to ${fullName(assignee)}.` : 'Unassigned — visible to all Maintenance workers again.');
+  if(assignee && assignee.id!==prevAssigneeId && assignee.email && emailReady()){
+    sendEmailTo(assignee.email, 'Maintenance ticket assigned to you', `Hi ${assignee.firstName||fullName(assignee)},\n\nYou've been assigned a maintenance ticket for "${u.name}" at ${unitGroupKey(u)} (${SITES[currentSite].name}).\n\nReason: ${u.maintenanceTicket.reason}\n\nView it: https://refrigeration.lancelotbiz.com/?unit=${u.id}&view=ticket`);
+  }
 }
 async function addTicketEntry(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
@@ -1803,6 +1810,9 @@ async function addPmTask(){
   await persistUnits(); renderPmTaskList(); render(); renderMaintenanceWorkerList(); renderMaintenancePmDueList();
   document.getElementById('pm_name').value=''; document.getElementById('pm_interval').value=''; document.getElementById('pm_preset').value='';
   toast(assignee ? `PM task added and assigned to ${fullName(assignee)}.` : 'PM task added.');
+  if(assignee && assignee.email && emailReady()){
+    sendEmailTo(assignee.email, 'New PM task assigned to you', `Hi ${assignee.firstName||fullName(assignee)},\n\nYou've been assigned a recurring PM task: "${name}" on "${u.name}" at ${unitGroupKey(u)} (${SITES[currentSite].name}), every ${interval} days.\n\nLog in to see it on your list: https://refrigeration.lancelotbiz.com/`);
+  }
 }
 async function completePmTask(taskId){
   const u = units.find(x=>x.id===pmModalUnitId); if(!u) return;
@@ -2043,6 +2053,10 @@ async function addUserToUnit(unitId, userId){
   u.assignedUserIds.push(userId); u.assignedUserNames.push(fullName(user));
   await persistUnits(); render(); renderUnitAssignments(); renderUserWorkerList();
   toast(`${fullName(user)} added to ${u.name}.`);
+  if(user.email && emailReady()){
+    sendEmailTo(user.email, 'New unit assigned to you', `Hi ${user.firstName||fullName(user)},\n\nYou've been assigned to check "${u.name}" at ${unitGroupKey(u)} (${SITES[currentSite].name}).\n\nLog in to see your checklist: https://refrigeration.lancelotbiz.com/`)
+      .catch(err=>console.error('Assignment email failed', err));
+  }
 }
 async function removeUserFromUnit(unitId, userId){
   const u = units.find(x=>x.id===unitId); if(!u) return;
