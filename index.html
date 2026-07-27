@@ -2517,6 +2517,7 @@ function renderFleetChart(){
 
 function buildIncidents(){
   const incidents=[];
+  const activeUnitIdsFromHistory = new Set();
   units.forEach(u=>{
     const checks=(u.history||[]).filter(h=>!h.entryType||h.entryType==='check').slice().sort((a,b)=>new Date(a.at)-new Date(b.at));
     let prevBad=false;
@@ -2529,9 +2530,19 @@ function buildIncidents(){
         if(h.compressor===false) reasonParts.push('compressor down');
         if(h.temp<u.tmin||h.temp>u.tmax) reasonParts.push(`${h.temp}°F (target ${u.tmin}-${u.tmax}°F)`);
         incidents.push({ unitId:u.id, unit:u.name, booth:unitGroupKey(u), at:h.at, reason:reasonParts.join(', '), resolvedAt: later?later.at:null });
+        if(!later) activeUnitIdsFromHistory.add(u.id);
       }
       prevBad=bad;
     });
+  });
+  // Safety net: a unit can be currently flagged (bad live fields) without a matching
+  // history transition — e.g. bulk-imported units, manually-edited fields, or data that
+  // predates this incident tracking. Surface those too so nothing silently disappears
+  // from Alerts & Incidents just because history parsing didn't catch it.
+  units.forEach(u=>{
+    if(statusOf(u)==='flag' && !activeUnitIdsFromHistory.has(u.id)){
+      incidents.push({ unitId:u.id, unit:u.name, booth:unitGroupKey(u), at:u.lastCheckAt||new Date().toISOString(), reason:complianceReasons(u).join(', ')||'flagged', resolvedAt:null });
+    }
   });
   return incidents.sort((a,b)=>new Date(b.at)-new Date(a.at));
 }
