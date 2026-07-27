@@ -77,7 +77,44 @@ The same "checking compliance %" also appears in the header stat-strip on the re
 
 - **"Clear" option** — when opening a failing unit that has no ticket yet, F&B Manager/Superadmin see a "Clear Report" option below the ticket form for cases that don't need a formal ticket (checked in person, resolved on its own, etc.). **Notes are required** to clear — it can't be dismissed silently. Once cleared, the incident shows a "Cleared" status with who cleared it and why, right on the row.
 
-## Alerts & Incidents — now ticket-aware
+## Assignment email notifications
+
+Whenever someone is assigned something, they get an email (if they have one on file):
+- **Unit assigned to a User** — via the "+ Add person…" chip control on any card
+- **Maintenance ticket assigned/reassigned** — when opening a new ticket with an assignee, or reassigning an existing one (only fires if the assignee actually changed)
+- **PM task assigned** — when a recurring task is created with an assignee (one-time notice, not repeated every time it comes due)
+
+Not yet built: text message versions of these same notifications — that's the next planned piece, requiring its own Twilio/Cloud Functions backend for this tracker.
+
+## Vendor dropdown defaults to Rufus Brubaker
+
+The Outside Service Call form's "Vendor / company" field is now a dropdown defaulting to **Rufus Brubaker** (the usual refrigeration vendor), with an "Other…" option that reveals a free-text field for the rare case of a different vendor.
+
+## Add Prior Repair (backfilling historical data)
+
+F&B Manager, Superadmin, and Accounting see an **"Add Prior Repair"** button at the top of the Costs tab. This logs a repair that happened *before* this system existed — pick the unit, vendor, cost, service date, invoice #, description, and an optional invoice photo — and it saves directly into that unit's closed repair history, no need to open-then-close a ticket. Useful for building out a complete cost/repeat-repair history without re-creating the whole ticket workflow for each old record.
+
+## Ticket notes now show in the unit's History
+
+The "Maintenance & Repairs" tab of a unit's History modal now includes everything from its maintenance tickets — not just standalone Log Entry notes:
+- The ticket's opening reason
+- Every dated note/photo a Maintenance worker added via "Add Entry"
+- Every outside-service call logged (vendor, cost, description)
+- The closing note, once a ticket is closed
+
+This applies to both the currently open ticket and every ticket in a unit's closed history — so nothing a Mechanic (or anyone) records in a ticket is ever invisible from the unit's own History view.
+
+## Ticket progress status
+
+Every open ticket has a **Progress Status** dropdown right in the ticket view: Needs Outside Service, Needs Internal Service, Waiting on Part, or **Fixed — Cooling**.
+
+- Choosing **"Fixed — Cooling"** automatically closes the ticket and clears it from every queue (with a confirmation prompt) — no separate Close Ticket step needed
+- Any other choice just updates the status and keeps the ticket open
+- **The status is visible everywhere a ticket is listed, without opening it**: the Maintenance Tickets overview, the Maintenance worker's own list, and the Dashboard card's ticket badge all show the current status directly
+
+## Alerts & Incidents — now ticket-aware, active-only
+
+- **Once an incident is Resolved or Cleared, it disappears from Alerts & Incidents entirely** — the feed only ever shows currently-active problems (Fail or Ticket Open). Nothing is lost though — the full record (including any cleared notes) still lives in the unit's own History under "Maintenance & Repairs."
 
 - Each incident row shows **Booth first** (bold), equipment name second — matching the "location leads" convention used elsewhere
 - **"Open" button** (F&B Manager/Superadmin only) — for any unresolved incident with no maintenance ticket yet, opens the Mark for Maintenance form pre-filled with the failure reason as the description
@@ -210,3 +247,4 @@ Submitting clears that equipment from the dropdowns immediately and resets the f
 - Faire QC Tracker: https://foodqc.lancelotbiz.com/
 - Faire Punch List: https://punchlist.lancelotbiz.com/
 - Shared legal pages (for trackers with SMS programs): https://legal.lancelotbiz.com/
+
