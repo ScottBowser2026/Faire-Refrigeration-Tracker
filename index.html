@@ -715,6 +715,18 @@
   </div>
 </div>
 
+<div class="overlay" id="addPhoneOverlay">
+  <div class="modal" style="max-width:380px;">
+    <h2>Add Your Phone Number</h2>
+    <div class="sub">We don't have one on file for you yet — helpful for account recovery and future text notifications.</div>
+    <div class="field"><input type="tel" id="add_phone_number" placeholder="(555) 555-1212"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="skipAddPhone()">Skip for now</button>
+      <button class="btn btn-primary" onclick="saveAddPhone()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 <script>
@@ -1052,6 +1064,7 @@ async function submitLogin(){
     sessionStorage.setItem('rt_session_pin', pin);
     showApp(true); renderRoleControls();
     toast(`Logged in as ${fullName(match.user)} (Lancelot Management).`);
+    maybePromptForPhone(match);
     return;
   }
   currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
@@ -1060,8 +1073,34 @@ async function submitLogin(){
   showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenancePmDueList(); renderDailyReportsList(); renderUserWorkerList(); renderUnitAssignments(); renderSuperadminList();
   toast(`Logged in as ${fullName(match.user)} (${SITES[currentSite].name}).`);
   handleDeepLink();
+  maybePromptForPhone(match);
 }
 document.getElementById('login_pin').addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
+
+function maybePromptForPhone(match){
+  if(match.user.phone) return;
+  if(sessionStorage.getItem('rt_phone_prompt_dismissed')) return;
+  document.getElementById('add_phone_number').value = '';
+  document.getElementById('addPhoneOverlay').classList.add('show');
+}
+async function saveAddPhone(){
+  const phone = document.getElementById('add_phone_number').value.trim();
+  if(!phone){ toast('Enter a phone number, or tap Skip for now.'); return; }
+  if(currentRole==='superadmin'){
+    const u = superadmins.find(x=>x.id===currentUserId); if(u){ u.phone=phone; await persistSuperadmins(); }
+  } else if(currentRole==='lancelot'){
+    const u = lancelotMgmt.find(x=>x.id===currentUserId); if(u){ u.phone=phone; await persistLancelotMgmt(); }
+  } else {
+    const list = siteUsersCache[currentSite]||[]; const u = list.find(x=>x.id===currentUserId); if(u){ u.phone=phone; await persistSiteUsers(); }
+  }
+  document.getElementById('addPhoneOverlay').classList.remove('show');
+  sessionStorage.setItem('rt_phone_prompt_dismissed','1');
+  toast('Phone number saved.');
+}
+function skipAddPhone(){
+  document.getElementById('addPhoneOverlay').classList.remove('show');
+  sessionStorage.setItem('rt_phone_prompt_dismissed','1');
+}
 
 // ---- Deep-linking — for opening a specific unit/ticket/PM/report directly from a text or email link ----
 // URL formats: ?unit=UNITID&view=ticket | ?unit=UNITID&view=pm | ?report=REPORTID
