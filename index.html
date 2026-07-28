@@ -793,6 +793,24 @@
   </div>
 </div>
 
+<!-- Staff Notes Modal -->
+<div class="overlay" id="staffNotesOverlay">
+  <div class="modal" style="max-width:480px;">
+    <h2>Staff Notes</h2>
+    <div class="sub">Updates about what's changed in the app</div>
+    <div id="staffNotesAddWrap" style="display:none; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:12px;">
+      <div class="field">
+        <textarea id="staffNoteText" rows="3" placeholder="e.g. Barcode scanning is now live — see your Log Check screen for a Scan button."></textarea>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" id="postStaffNoteBtn">Post Note</button>
+    </div>
+    <div id="staffNotesList" style="max-height:50vh; overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeStaffNotesModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- HISTORY -->
 <div class="overlay" id="historyOverlay">
   <div class="modal" style="max-width:560px;">
@@ -871,6 +889,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const refSuperadmins = db.ref('refrigeration/superadmins');
 const refLancelotMgmt = db.ref('refrigeration/lancelotManagement');
+const refStaffNotes = db.ref('refrigeration/staffNotes'); // global — same notes show for every site
 
 // ===================== EMAILJS CONFIG (same as before) =====================
 const EMAILJS_PUBLIC_KEY = "sB7w0MyBj_u6ayu_0";
@@ -969,6 +988,61 @@ async function loadSuperadmins(){
   if(needsPersist) await refSuperadmins.set(arrayToObj(superadmins));
   refSuperadmins.on('value', s=>{ superadmins = s.exists()?objToArray(s.val()).map(migratePersonRecord):[]; renderSuperadminList(); });
 }
+
+// ---- Staff Notes: a global "what's changed" feed, same for every site ----
+let staffNotes = [];
+async function loadStaffNotes(){
+  const snap = await refStaffNotes.once('value');
+  staffNotes = snap.exists() ? objToArray(snap.val()) : [];
+  refStaffNotes.on('value', s=>{ staffNotes = s.exists()?objToArray(s.val()):[]; renderStaffNotesList(); updateStaffNotesBadge(); });
+}
+function updateStaffNotesBadge(){
+  const badge = document.getElementById('staffNotesBadge'); if(!badge) return;
+  const lastSeen = localStorage.getItem('rt_notes_last_seen') || '1970-01-01T00:00:00.000Z';
+  const unseenCount = staffNotes.filter(n=>n.at > lastSeen).length;
+  if(unseenCount>0){ badge.textContent = unseenCount; badge.style.display = 'inline-block'; }
+  else { badge.style.display = 'none'; }
+}
+function renderStaffNotesList(){
+  const wrap = document.getElementById('staffNotesList'); if(!wrap) return;
+  const sorted = staffNotes.slice().sort((a,b)=>new Date(b.at)-new Date(a.at));
+  if(sorted.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13.5px; padding:8px 0;">No notes yet.</div>`; return; }
+  wrap.innerHTML = sorted.map(n=>`
+    <div style="padding:10px 0; border-bottom:1px solid var(--border);">
+      <div style="font-size:13.5px; white-space:pre-wrap;">${escapeHtml(n.text)}</div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+        <span style="font-family:var(--mono); font-size:11px; color:#888;">${escapeHtml(n.by)} · ${fmtDate(n.at)}</span>
+        ${isSuperadmin() ? `<button class="link-btn" style="color:var(--flag);" onclick="deleteStaffNote('${n.id}')">delete</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+function openStaffNotesModal(){
+  document.getElementById('staffNotesAddWrap').style.display = isSuperadmin() ? 'block' : 'none';
+  document.getElementById('staffNoteText').value = '';
+  renderStaffNotesList();
+  document.getElementById('staffNotesOverlay').classList.add('show');
+  localStorage.setItem('rt_notes_last_seen', new Date().toISOString());
+  updateStaffNotesBadge();
+}
+function closeStaffNotesModal(){ document.getElementById('staffNotesOverlay').classList.remove('show'); }
+async function postStaffNote(){
+  if(!isSuperadmin()) return;
+  const text = document.getElementById('staffNoteText').value.trim();
+  if(!text){ toast('Write something first.'); return; }
+  const note = { id: uid(), text, by: currentUser, at: new Date().toISOString() };
+  staffNotes.push(note);
+  await refStaffNotes.set(arrayToObj(staffNotes));
+  document.getElementById('staffNoteText').value = '';
+  toast('Note posted.');
+}
+async function deleteStaffNote(id){
+  if(!isSuperadmin()) return;
+  if(!confirm('Delete this note for everyone?')) return;
+  staffNotes = staffNotes.filter(n=>n.id!==id);
+  await refStaffNotes.set(arrayToObj(staffNotes));
+}
+document.getElementById('postStaffNoteBtn').addEventListener('click', postStaffNote);
+document.getElementById('staffNotesOverlay').addEventListener('click', e=>{ if(e.target.id==='staffNotesOverlay') closeStaffNotesModal(); });
 
 async function loadAllSiteUsersForLogin(){
   for(const key of SUPERADMIN_SITE_ORDER){
@@ -1114,8 +1188,11 @@ function renderRoleControls(){
     }
     whoBox.innerHTML = `${switcherHtml}<span class="role-pill ${roleClass_}">${roleLabel_}</span>
       <span style="font-weight:600;">${escapeHtml(currentUser)}</span>
+      <button class="btn who-btn btn-small" id="staffNotesBtn">📣 Staff Notes<span id="staffNotesBadge" style="display:none; background:var(--flag); color:#fff; border-radius:10px; padding:1px 6px; font-size:10.5px; margin-left:5px;"></span></button>
       <button class="btn who-btn btn-small" id="logoutBtn">Log Out</button>`;
     document.getElementById('logoutBtn').addEventListener('click', logout);
+    document.getElementById('staffNotesBtn').addEventListener('click', openStaffNotesModal);
+    updateStaffNotesBadge();
     if(isSuperadmin()){
       document.getElementById('siteSwitcher').addEventListener('change', async (e)=>{
         currentSite = e.target.value;
@@ -3243,6 +3320,7 @@ document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.
 (async function init(){
   await migrateOldDataIfNeeded();
   await loadSuperadmins();
+  await loadStaffNotes();
   await loadLancelotMgmt();
   await loadAllSiteUsersForLogin();
   await loadAllSiteUnitsForSummary();
