@@ -2358,6 +2358,14 @@ async function saveUnit(){
   if(!name){ toast('Enter a name.'); return; }
   const tmin = parseFloat(document.getElementById('u_tmin').value);
   const tmax = parseFloat(document.getElementById('u_tmax').value);
+  if(isNaN(tmin) || isNaN(tmax)){
+    toast('Enter valid numbers for both Min and Max temperature — nothing was saved.');
+    return;
+  }
+  if(tmin >= tmax){
+    toast('Min temp must be lower than Max temp — nothing was saved.');
+    return;
+  }
   const assignedIds = Array.from(document.getElementById('u_assigned_user').selectedOptions).map(o=>o.value);
   const assignedUsers = assignedIds.map(id=>usersWithRole('crew').find(x=>x.id===id)).filter(Boolean);
   const newBarcodeId = document.getElementById('u_barcode_id').value.trim()||null;
@@ -2369,10 +2377,21 @@ async function saveUnit(){
     booth:document.getElementById('u_booth').value.trim(), location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
     serviceId:document.getElementById('u_service_id').value.trim()||null,
     barcodeId:newBarcodeId,
-    tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
-  if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); Object.assign(u,data); }
+    tmin, tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
+  let wasFlagged = false;
+  if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); wasFlagged = statusOf(u)==='flag'; Object.assign(u,data); }
   else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, compressorOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
-  await persistUnits(); closeUnitModal(); render(); renderFleetChart(); renderUserWorkerList(); renderUnitAssignments(); toast('Saved.');
+  await persistUnits(); closeUnitModal(); render(); renderFleetChart(); renderUserWorkerList(); renderUnitAssignments();
+  if(editingUnitId){
+    const u = units.find(x=>x.id===editingUnitId);
+    if(wasFlagged && statusOf(u)!=='flag'){
+      toast(`Saved — ${u.name}'s live reading is back in range, but any existing Alerts & Incidents entry for it still needs to be cleared manually (Clear Report or close its ticket).`);
+    } else {
+      toast('Saved.');
+    }
+  } else {
+    toast('Saved.');
+  }
 }
 document.getElementById('deleteUnitBtn').addEventListener('click', async ()=>{
   if(!editingUnitId) return;
