@@ -479,6 +479,12 @@
     <div class="field"><label>Location <span class="hint">(more specific placement within the booth, optional)</span></label><input type="text" id="u_location"></div>
     <div class="field"><label>Stock / contents</label><input type="text" id="u_stock"></div>
     <div class="field"><label>Service ID <span class="hint">(tag/serial — e.g. "RB-014" for Rufus Brubaker-serviced units, or "PARF-014" by site)</span></label><input type="text" id="u_service_id" placeholder="Leave blank if not yet recorded"></div>
+    <div class="field"><label>Barcode ID <span class="hint">(the value encoded on the physical scan tag — separate from Service ID)</span></label>
+      <div style="display:flex; gap:6px;">
+        <input type="text" id="u_barcode_id" placeholder="Scan or type the tag's value" style="flex:1;">
+        <button type="button" class="btn btn-outline btn-small" id="scanToFillBarcodeBtn" style="white-space:nowrap;">📷 Scan</button>
+      </div>
+    </div>
     <div class="field"><label>Assigned Users <span class="hint">(any of them can check it — first one to log it clears it for everyone)</span></label><select id="u_assigned_user" multiple size="4" style="height:auto;"></select></div>
     <div class="two-col">
       <div class="field"><label>Target min °F</label><input type="text" id="u_tmin"></div>
@@ -2221,7 +2227,7 @@ function openAddModal(){
   document.getElementById('unitModalTitle').textContent='Add Unit';
   document.getElementById('deleteUnitBtn').style.display='none';
   document.getElementById('unitDangerZone').style.display='none';
-  ['u_name','u_booth','u_location','u_stock','u_service_id','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
+  ['u_name','u_booth','u_location','u_stock','u_service_id','u_barcode_id','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('u_type').value='cooler'; document.getElementById('u_runtime').value='always';
   populateAssignedUserSelect([]); populateBoothDatalist();
   document.getElementById('unitOverlay').classList.add('show');
@@ -2239,6 +2245,7 @@ function openEditModal(unitId){
   document.getElementById('u_location').value=u.location||'';
   document.getElementById('u_stock').value=u.stock||'';
   document.getElementById('u_service_id').value=u.serviceId||'';
+  document.getElementById('u_barcode_id').value=u.barcodeId||'';
   document.getElementById('u_tmin').value=u.tmin!=null?u.tmin:'';
   document.getElementById('u_tmax').value=u.tmax!=null?u.tmax:'';
   populateAssignedUserSelect(u.assignedUserIds||[]); populateBoothDatalist();
@@ -2252,9 +2259,15 @@ async function saveUnit(){
   const tmax = parseFloat(document.getElementById('u_tmax').value);
   const assignedIds = Array.from(document.getElementById('u_assigned_user').selectedOptions).map(o=>o.value);
   const assignedUsers = assignedIds.map(id=>usersWithRole('crew').find(x=>x.id===id)).filter(Boolean);
+  const newBarcodeId = document.getElementById('u_barcode_id').value.trim()||null;
+  if(newBarcodeId && units.some(x=>x.id!==editingUnitId && x.barcodeId && x.barcodeId.trim().toLowerCase()===newBarcodeId.toLowerCase())){
+    toast('That Barcode ID is already assigned to another unit — check for a duplicate tag.');
+    return;
+  }
   const data = { name, type:document.getElementById('u_type').value, runtime:document.getElementById('u_runtime').value,
     booth:document.getElementById('u_booth').value.trim(), location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
     serviceId:document.getElementById('u_service_id').value.trim()||null,
+    barcodeId:newBarcodeId,
     tmin:isNaN(tmin)?33:tmin, tmax:isNaN(tmax)?40:tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
   if(editingUnitId){ const u=units.find(x=>x.id===editingUnitId); Object.assign(u,data); }
   else{ units.push({ id:uid(), ...data, currentTemp:null, fansOperating:null, compressorOperating:null, lastCheckBy:null, lastCheckAt:null, history:[] }); }
@@ -2286,14 +2299,16 @@ document.getElementById('clearUnitHistoryBtn').addEventListener('click', async (
 // ---- Barcode / Service Tag Scanner ----
 let scanInstance = null;
 let scanBusy = false;
+let scanMode = 'lookup'; // 'lookup' = find & jump to a unit; 'fill' = write the scanned value into a field
 
 function findUnitByServiceId(text){
   const clean = (text||'').trim().toLowerCase();
   if(!clean) return null;
-  return units.find(u=>u.serviceId && u.serviceId.trim().toLowerCase()===clean) || null;
+  return units.find(u=>u.barcodeId && u.barcodeId.trim().toLowerCase()===clean) || null;
 }
 
-async function openScanModal(){
+async function openScanModal(mode){
+  scanMode = mode || 'lookup';
   if(typeof Html5Qrcode === 'undefined'){
     toast('Scanner library failed to load — check your connection and try again.');
     return;
@@ -2324,9 +2339,15 @@ async function closeScanModal(){
 async function onScanSuccess(decodedText){
   if(scanBusy) return; // ignore repeat frames while we're already handling a match
   scanBusy = true;
+  if(scanMode==='fill'){
+    await closeScanModal();
+    document.getElementById('u_barcode_id').value = decodedText.trim();
+    toast('Barcode captured — review and hit Save.');
+    return;
+  }
   const match = findUnitByServiceId(decodedText);
   if(!match){
-    document.getElementById('scanMsg').innerHTML = `<span style="color:var(--flag);">No unit found with Service ID "${escapeHtml(decodedText)}" — check the tag, or ask an admin to add it under Edit Unit.</span>`;
+    document.getElementById('scanMsg').innerHTML = `<span style="color:var(--flag);">No unit found with Barcode ID "${escapeHtml(decodedText)}" — check the tag, or ask an admin to add it under Edit Unit.</span>`;
     scanBusy = false; // let them try scanning again
     return;
   }
@@ -2364,9 +2385,10 @@ function routeScannedUnitToMaintenance(unit){
   }
   openTicketModal(unit.id);
 }
-document.getElementById('scanBarcodeBtn').addEventListener('click', openScanModal);
-document.getElementById('scanBarcodeBtnUser').addEventListener('click', openScanModal);
-document.getElementById('scanBarcodeBtnMaint').addEventListener('click', openScanModal);
+document.getElementById('scanBarcodeBtn').addEventListener('click', ()=>openScanModal('lookup'));
+document.getElementById('scanBarcodeBtnUser').addEventListener('click', ()=>openScanModal('lookup'));
+document.getElementById('scanBarcodeBtnMaint').addEventListener('click', ()=>openScanModal('lookup'));
+document.getElementById('scanToFillBarcodeBtn').addEventListener('click', ()=>openScanModal('fill'));
 document.getElementById('scanOverlay').addEventListener('click', e=>{ if(e.target.id==='scanOverlay') closeScanModal(); });
 
 function openCheckModal(unitId){
