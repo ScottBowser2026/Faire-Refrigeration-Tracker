@@ -248,7 +248,6 @@
     <input type="text" id="searchBox" placeholder="Search units…">
     <div class="spacer"></div>
     <button class="btn btn-outline" id="notifyBtn">Alert flagged</button>
-    <button class="btn btn-outline" id="reportBtn">Not-checked report</button>
     <button class="btn btn-outline" id="masterReportBtn" style="display:none">Master report</button>
     <button class="btn btn-primary" id="submitDailyReportBtn">Submit Daily Report</button>
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
@@ -1025,7 +1024,7 @@ function neverChecked(u){ return !u.lastCheckAt; }
 function dayComplianceMap(u){
   const map = {};
   (u.history||[]).filter(h=>!h.entryType||h.entryType==='check').forEach(h=>{
-    const key = new Date(h.at).toISOString().slice(0,10);
+    const key = localDateKeyFor(h.at);
     const bad = (h.fans===false)||(h.compressor===false)||(h.temp<u.tmin||h.temp>u.tmax);
     if(!(key in map)) map[key]=!bad; else if(bad) map[key]=false;
   });
@@ -2410,7 +2409,6 @@ function openReportModal(){
   document.getElementById('reportOverlay').classList.add('show');
 }
 function closeReportModal(){ document.getElementById('reportOverlay').classList.remove('show'); }
-document.getElementById('reportBtn').addEventListener('click', openReportModal);
 
 async function sendEmailTo(toEmail, subject, bodyText){
   if(!window.emailjs){ toast("EmailJS didn't load."); return false; }
@@ -2566,7 +2564,7 @@ document.getElementById('notifyBtn').addEventListener('click', async ()=>{
 
 function renderFleetChart(){
   const canvas = document.getElementById('fleetChart'); if(!canvas) return;
-  const days=[]; for(let i=13;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(d.toISOString().slice(0,10)); }
+  const days=[]; for(let i=13;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(localDateKeyFor(d.toISOString())); }
   const pct = days.map(day=>{ let checked=0, compliant=0; units.forEach(u=>{ const map=dayComplianceMap(u); if(day in map){ checked++; if(map[day]) compliant++; } }); return checked?Math.round((compliant/checked)*100):null; });
   const labels = days.map(d=>new Date(d+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}));
   if(fleetChart) fleetChart.destroy();
