@@ -74,9 +74,9 @@
   .site-switcher{ display:flex; align-items:center; gap:6px; }
   .site-switcher select{ font-weight:600; }
 
-  .stat-strip{ display:flex; gap:18px; margin-top:14px; flex-wrap:wrap; font-family:var(--mono); font-size:12px; }
-  .stat-strip .stat{ display:flex; align-items:baseline; gap:6px; color:#c9d2cb; }
-  .stat-strip .stat b{ font-size:18px; color:var(--paper); }
+  .stat-strip{ display:flex; gap:28px; margin-top:16px; flex-wrap:wrap; justify-content:center; font-family:var(--mono); font-size:14px; }
+  .stat-strip .stat{ display:flex; align-items:baseline; gap:7px; color:#dfe5e0; }
+  .stat-strip .stat b{ font-size:26px; color:var(--paper); }
   .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
   .dot-ok{background:#7fbf7f;} .dot-flag{background:#e08268;} .dot-unset{background:#a9afa8;}
 
@@ -2528,28 +2528,47 @@ function renderDailyReportsList(){
   const wrap = document.getElementById('dailyReportsList'); if(!wrap) return;
   const sorted = dailyReports.slice().sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
   if(sorted.length===0){ wrap.innerHTML = `<div style="color:#888; font-size:13.5px;">No daily reports submitted yet.</div>`; return; }
-  wrap.innerHTML = sorted.slice(0,14).map(r=>`
+  wrap.innerHTML = sorted.slice(0,14).map(r=>{
+    const checkedCount = r.totalUnits - r.notCheckedCount;
+    const checkedPct = r.totalUnits ? Math.round((checkedCount/r.totalUnits)*100) : 0;
+    const compliancePct = checkedCount ? Math.round((r.compliantCount/checkedCount)*100) : 0;
+    return `
     <div class="alert-row" style="cursor:pointer;" onclick="openDailyReportModal('${r.id}')">
       <div><b>${r.date}</b> <span class="meta">${r.auto?'auto-generated 11:59 PM':'submitted by '+escapeHtml(r.submittedBy)}</span></div>
       <div style="text-align:right;">
-        <span style="color:var(--ok); font-size:12.5px;">${r.compliantCount} ok</span> ·
-        <span style="color:var(--flag); font-size:12.5px;">${r.flaggedCount} flagged</span> ·
-        <span style="color:var(--unset); font-size:12.5px;">${r.notCheckedCount} not checked</span>
+        <span style="color:${checkedPct>=90?'var(--ok)':'var(--flag)'}; font-size:12.5px;">${checkedPct}% checked</span> ·
+        <span style="color:${compliancePct>=90?'var(--ok)':'var(--flag)'}; font-size:12.5px;">${compliancePct}% compliant</span>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function openDailyReportModal(reportId){
   const r = dailyReports.find(x=>x.id===reportId); if(!r) return;
   document.getElementById('dailyReportSub').textContent = `${r.date} — ${r.auto?'auto-generated at 11:59 PM (nobody had submitted yet)':'submitted by '+r.submittedBy+' at '+fmtDate(r.submittedAt)}`;
   const body = document.getElementById('dailyReportBody');
+  const checkedCount = r.totalUnits - r.notCheckedCount;
+  const checkedPct = r.totalUnits ? Math.round((checkedCount/r.totalUnits)*100) : 0;
+  const compliancePct = checkedCount ? Math.round((r.compliantCount/checkedCount)*100) : 0;
+  const summary = `
+    <div style="display:flex; gap:24px; flex-wrap:wrap; justify-content:center; text-align:center; padding:10px 0 16px; border-bottom:1px solid var(--border); margin-bottom:14px;">
+      <div>
+        <div style="font-size:28px; font-weight:700; color:${checkedPct>=90?'var(--ok)':'var(--flag)'};">${checkedPct}%</div>
+        <div style="font-family:var(--mono); font-size:11.5px; color:#888;">checked (${checkedCount} of ${r.totalUnits})</div>
+      </div>
+      <div>
+        <div style="font-size:28px; font-weight:700; color:${compliancePct>=90?'var(--ok)':'var(--flag)'};">${compliancePct}%</div>
+        <div style="font-family:var(--mono); font-size:11.5px; color:#888;">in compliance (${r.compliantCount} of ${checkedCount} checked)</div>
+      </div>
+    </div>`;
   const section = (title,list,color,line) => list.length ? `<div style="margin-bottom:14px;">
     <div style="font-family:var(--mono); font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:${color}; font-weight:700; margin-bottom:6px;">${title} (${list.length})</div>
     ${list.map(u=>`<div style="padding:6px 0; border-bottom:1px solid var(--border); font-size:13.5px;"><b>${escapeHtml(u.name)}</b> <span style="color:#888; font-family:var(--mono); font-size:11px;">(${escapeHtml(u.location||'')})</span>
     ${line(u)?`<div style="font-family:var(--mono); font-size:11.5px; color:${color};">${line(u)}</div>`:''}</div>`).join('')}
   </div>` : '';
-  body.innerHTML = section('Flagged', r.flaggedUnits||[], 'var(--flag)', u=>u.reasons)
+  body.innerHTML = summary
+    + section('Flagged', r.flaggedUnits||[], 'var(--flag)', u=>u.reasons)
     + section('Not Checked', r.notCheckedUnits||[], 'var(--unset)', u=>u.assignedTo?`Assigned to: ${u.assignedTo}`:'')
-    + `<div style="font-family:var(--mono); font-size:12px; color:#777; padding-top:6px;">${r.compliantCount} unit(s) compliant and checked · ${r.totalUnits} total units in the system at submission time.</div>`;
+    + `<div style="font-family:var(--mono); font-size:12px; color:#777; padding-top:6px;">${r.totalUnits} total units in the system at submission time.</div>`;
   document.getElementById('dailyReportOverlay').classList.add('show');
 }
 function closeDailyReportModal(){ document.getElementById('dailyReportOverlay').classList.remove('show'); }
