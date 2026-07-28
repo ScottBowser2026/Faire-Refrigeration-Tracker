@@ -197,6 +197,23 @@
     .modal-actions .btn{ flex:1 1 auto; }
     .access-row{ flex-direction:column; align-items:stretch; }
     .access-row input{ width:100%; }
+
+    /* Admin Panel compaction — same info, far less scroll on a phone */
+    .panel{ padding:10px 12px; margin-bottom:10px; }
+    .field{ margin-bottom:8px; }
+    .field label{ margin-bottom:2px; font-size:11px; }
+    .field input, .field select, .field textarea{ padding:7px 9px; }
+    .section-head{ margin:18px 0 8px; }
+    .ticket-card{ padding:16px 14px 14px; }
+    .toggle-row{ padding:6px 0; }
+
+    /* Admin Panel's inline "add person/recipient/superadmin" rows use ad-hoc
+       flex layouts with generous min-widths that force every field onto its
+       own full-width row on a phone. Loosen that so fields pair up instead. */
+    #accessPanelWrap div[style*="display:flex"]{ gap:6px !important; }
+    #accessPanelWrap input[type="text"], #accessPanelWrap select{
+      min-width:0 !important; flex:1 1 45% !important; padding:7px 8px !important; font-size:13.5px !important;
+    }
   }
 </style>
 </head>
