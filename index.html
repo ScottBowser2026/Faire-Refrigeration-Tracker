@@ -2565,11 +2565,16 @@ document.getElementById('notifyBtn').addEventListener('click', async ()=>{
 function renderFleetChart(){
   const canvas = document.getElementById('fleetChart'); if(!canvas) return;
   const days=[]; for(let i=13;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(localDateKeyFor(d.toISOString())); }
-  const pct = days.map(day=>{ let checked=0, compliant=0; units.forEach(u=>{ const map=dayComplianceMap(u); if(day in map){ checked++; if(map[day]) compliant++; } }); return checked?Math.round((compliant/checked)*100):null; });
+  const totalUnits = units.length;
+  const checkedPct = days.map(day=>{ let checked=0; units.forEach(u=>{ const map=dayComplianceMap(u); if(day in map) checked++; }); return totalUnits?Math.round((checked/totalUnits)*100):null; });
+  const compliantPct = days.map(day=>{ let checked=0, compliant=0; units.forEach(u=>{ const map=dayComplianceMap(u); if(day in map){ checked++; if(map[day]) compliant++; } }); return checked?Math.round((compliant/checked)*100):null; });
   const labels = days.map(d=>new Date(d+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}));
   if(fleetChart) fleetChart.destroy();
-  fleetChart = new Chart(canvas.getContext('2d'), { type:'line', data:{ labels, datasets:[{ label:'% compliant', data:pct, borderColor:'#3f7d82', backgroundColor:'rgba(63,125,130,.15)', fill:true, tension:.25, spanGaps:true }] },
-    options:{ scales:{ y:{ min:0, max:100, ticks:{ callback:v=>v+'%' } } }, plugins:{ legend:{ display:false } } } });
+  fleetChart = new Chart(canvas.getContext('2d'), { type:'line', data:{ labels, datasets:[
+    { label:'% units checked', data:checkedPct, borderColor:'#7a8f89', backgroundColor:'rgba(122,143,137,.10)', fill:true, tension:.25, spanGaps:true },
+    { label:'% in compliance', data:compliantPct, borderColor:'#3f7d82', backgroundColor:'rgba(63,125,130,.15)', fill:true, tension:.25, spanGaps:true }
+  ] },
+    options:{ scales:{ y:{ min:0, max:100, ticks:{ callback:v=>v+'%' } } }, plugins:{ legend:{ display:true, position:'bottom' } } } });
 }
 
 function buildIncidents(){
