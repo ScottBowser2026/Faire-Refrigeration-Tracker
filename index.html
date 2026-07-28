@@ -278,6 +278,7 @@
 
   <!-- MAINTENANCE WORKER VIEW (Maintenance role only — replaces the dashboard above) -->
   <div id="maintenanceWorkerView" style="display:none">
+    <button class="btn btn-outline" style="width:100%; margin-bottom:14px;" id="scanBarcodeBtnMaint">📷 Scan Barcode to Find Unit</button>
     <div id="maintenancePmDueList"></div>
     <div class="section-head"><h2>My Maintenance List</h2><span class="hint">Units currently flagged for maintenance at this site</span></div>
     <div id="maintenanceWorkerList"></div>
@@ -2332,6 +2333,8 @@ async function onScanSuccess(decodedText){
   await closeScanModal();
   if(isUserRole()){
     routeScannedUnitToUserView(match);
+  } else if(isMaintenanceWorker()){
+    routeScannedUnitToMaintenance(match);
   } else {
     openCheckModal(match.id);
   }
@@ -2350,8 +2353,20 @@ function routeScannedUnitToUserView(unit){
   toast(`${unit.name} selected — ready to log.`);
   document.getElementById('uc_temp').focus();
 }
+function routeScannedUnitToMaintenance(unit){
+  if(!unit.maintenanceTicket){
+    toast(`${unit.name} doesn't have an open maintenance ticket right now.`);
+    return;
+  }
+  if(unit.maintenanceTicket.assignedToId && unit.maintenanceTicket.assignedToId!==currentUserId){
+    toast(`${unit.name}'s ticket is assigned to someone else.`);
+    return;
+  }
+  openTicketModal(unit.id);
+}
 document.getElementById('scanBarcodeBtn').addEventListener('click', openScanModal);
 document.getElementById('scanBarcodeBtnUser').addEventListener('click', openScanModal);
+document.getElementById('scanBarcodeBtnMaint').addEventListener('click', openScanModal);
 document.getElementById('scanOverlay').addEventListener('click', e=>{ if(e.target.id==='scanOverlay') closeScanModal(); });
 
 function openCheckModal(unitId){
