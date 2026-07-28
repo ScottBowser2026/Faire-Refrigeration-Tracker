@@ -2257,9 +2257,10 @@ document.getElementById('resetUnitStatusBtn').addEventListener('click', async ()
 document.getElementById('clearUnitHistoryBtn').addEventListener('click', async ()=>{
   if(!editingUnitId || !isSuperadmin()) return;
   const u = units.find(x=>x.id===editingUnitId); if(!u) return;
-  if(!confirm(`Erase all logged checks, tickets, and PM records for ${u.name}? The unit itself stays, but its entire history disappears. Cannot be undone.`)) return;
+  if(!confirm(`Erase all logged checks, tickets, and PM records for ${u.name}, and reset its current status back to "not checked"? The unit itself stays, but its entire history disappears and any flagged state clears. Cannot be undone.`)) return;
   u.history=[]; u.maintenanceTicket=null; u.clearedIncidents=[]; if(u.pmTasks) u.pmTasks.forEach(t=>{ t.lastCompletedAt=null; });
-  await persistUnits(); render(); renderFleetChart(); renderIncidents(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList(); toast(`${u.name}'s history cleared.`);
+  u.currentTemp=null; u.fansOperating=null; u.compressorOperating=null; u.lastCheckBy=null; u.lastCheckAt=null;
+  await persistUnits(); render(); renderFleetChart(); renderIncidents(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList(); toast(`${u.name}'s history cleared and status reset.`);
 });
 
 
