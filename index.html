@@ -247,8 +247,6 @@
     </select>
     <input type="text" id="searchBox" placeholder="Search units…">
     <div class="spacer"></div>
-    <button class="btn btn-outline" id="notifyBtn">Alert flagged</button>
-    <button class="btn btn-outline" id="masterReportBtn" style="display:none">Master report</button>
     <button class="btn btn-primary" id="submitDailyReportBtn">Submit Daily Report</button>
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
     <button class="btn btn-outline" id="importCsvBtn" style="display:none">Import from CSV</button>
@@ -1068,7 +1066,6 @@ function renderRoleControls(){
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
     document.getElementById('importCsvBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('downloadCsvTemplateBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
-    document.getElementById('masterReportBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('dangerZonePanel').style.display = isSuperadmin() ? 'block' : 'none';
@@ -2461,7 +2458,6 @@ async function sendMasterReport(){
   const ok = await sendToNotifyList(`Master Refrigeration Report — ${outOfCompliance.length} out of compliance — ${SITES[currentSite].name}`, `Full-fleet compliance report:\n\n${lines.join('\n')}\n\nSent by: ${currentUser||'—'}`);
   if(ok){ toast('Master report sent.'); closeMasterReportModal(); }
 }
-document.getElementById('masterReportBtn').addEventListener('click', openMasterReportModal);
 
 // ---- Daily Report (compiled snapshot + stubbed text-notification hook) ----
 function localDateKey(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
@@ -2573,13 +2569,6 @@ function openDailyReportModal(reportId){
 }
 function closeDailyReportModal(){ document.getElementById('dailyReportOverlay').classList.remove('show'); }
 document.getElementById('submitDailyReportBtn').addEventListener('click', submitDailyReport);
-document.getElementById('notifyBtn').addEventListener('click', async ()=>{
-  const flagged = visibleUnits().filter(u=>statusOf(u)==='flag');
-  if(flagged.length===0){ toast('Nothing flagged in view right now.'); return; }
-  const lines = flagged.map(u=>`- ${u.name} (${u.location||''}): ${complianceReasons(u).join(', ')} [checked by ${u.lastCheckBy||'—'}]`);
-  const ok = await sendToNotifyList(`Refrigeration Alert — ${flagged.length} unit(s) flagged — ${SITES[currentSite].name}`, `The following units are flagged:\n\n${lines.join('\n')}\n\nLogged by: ${currentUser||'—'}`);
-  if(ok) toast('Alert sent.');
-});
 
 function renderFleetChart(){
   const canvas = document.getElementById('fleetChart'); if(!canvas) return;
