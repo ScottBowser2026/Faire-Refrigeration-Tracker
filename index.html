@@ -41,6 +41,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root{
     --ink:#1c2321; --paper:#eef0ea; --steel:#3d4a45; --steel-2:#2a3330;
@@ -261,6 +262,7 @@
     </select>
     <input type="text" id="searchBox" placeholder="Search units…">
     <div class="spacer"></div>
+    <button class="btn btn-outline" id="scanBarcodeBtn">📷 Scan Barcode</button>
     <button class="btn btn-primary" id="submitDailyReportBtn">Submit Daily Report</button>
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
     <button class="btn btn-outline" id="importCsvBtn" style="display:none">Import from CSV</button>
@@ -288,6 +290,7 @@
       <h3 class="ticket-title">Refrigeration Check</h3>
       <div class="ticket-sub">Time &amp; temperature verification</div>
 
+      <button class="btn btn-outline" style="width:100%; margin-bottom:12px;" id="scanBarcodeBtnUser">📷 Scan Barcode to Select Unit</button>
       <div class="field"><label>Booth</label><select id="uc_booth"></select></div>
       <div class="field"><label>Equipment</label><select id="uc_equipment" disabled><option value="">Select booth first…</option></select></div>
       <div class="field"><label>Entry type</label>
@@ -740,6 +743,21 @@
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeMasterReportModal()">Close</button>
       <button class="btn btn-primary" onclick="sendMasterReport()">Email Notify List</button>
+    </div>
+  </div>
+</div>
+
+<!-- Barcode Scanner Modal -->
+<div class="overlay" id="scanOverlay">
+  <div class="modal" style="max-width:420px;">
+    <h2>Scan Service Tag</h2>
+    <div class="sub">Point the camera at the unit's barcode</div>
+    <div id="scanReaderWrap" style="border-radius:8px; overflow:hidden; background:#000; min-height:220px;">
+      <div id="scanReader" style="width:100%;"></div>
+    </div>
+    <div id="scanMsg" style="min-height:20px; font-size:13px; margin-top:10px; text-align:center;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeScanModal()">Cancel</button>
     </div>
   </div>
 </div>
@@ -2263,6 +2281,78 @@ document.getElementById('clearUnitHistoryBtn').addEventListener('click', async (
   await persistUnits(); render(); renderFleetChart(); renderIncidents(); renderMaintenanceTicketsOverview(); renderMaintenanceWorkerList(); toast(`${u.name}'s history cleared and status reset.`);
 });
 
+
+// ---- Barcode / Service Tag Scanner ----
+let scanInstance = null;
+let scanBusy = false;
+
+function findUnitByServiceId(text){
+  const clean = (text||'').trim().toLowerCase();
+  if(!clean) return null;
+  return units.find(u=>u.serviceId && u.serviceId.trim().toLowerCase()===clean) || null;
+}
+
+async function openScanModal(){
+  if(typeof Html5Qrcode === 'undefined'){
+    toast('Scanner library failed to load — check your connection and try again.');
+    return;
+  }
+  scanBusy = false;
+  document.getElementById('scanMsg').textContent = '';
+  document.getElementById('scanOverlay').classList.add('show');
+  scanInstance = new Html5Qrcode('scanReader');
+  try{
+    await scanInstance.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 250, height: 150 } },
+      onScanSuccess,
+      () => {} // ignore per-frame "no code found" noise
+    );
+  }catch(err){
+    console.error(err);
+    document.getElementById('scanMsg').innerHTML = `<span style="color:var(--flag);">Couldn't access the camera — check that you've granted camera permission to this site, and that you're on HTTPS.</span>`;
+  }
+}
+async function closeScanModal(){
+  document.getElementById('scanOverlay').classList.remove('show');
+  if(scanInstance){
+    try{ await scanInstance.stop(); scanInstance.clear(); }catch(e){ /* already stopped */ }
+    scanInstance = null;
+  }
+}
+async function onScanSuccess(decodedText){
+  if(scanBusy) return; // ignore repeat frames while we're already handling a match
+  scanBusy = true;
+  const match = findUnitByServiceId(decodedText);
+  if(!match){
+    document.getElementById('scanMsg').innerHTML = `<span style="color:var(--flag);">No unit found with Service ID "${escapeHtml(decodedText)}" — check the tag, or ask an admin to add it under Edit Unit.</span>`;
+    scanBusy = false; // let them try scanning again
+    return;
+  }
+  await closeScanModal();
+  if(isUserRole()){
+    routeScannedUnitToUserView(match);
+  } else {
+    openCheckModal(match.id);
+  }
+}
+function routeScannedUnitToUserView(unit){
+  const pending = myPendingUnits();
+  if(!pending.some(u=>u.id===unit.id)){
+    toast(`${unit.name} isn't assigned to you — ask an admin if you need access to log it.`);
+    return;
+  }
+  const booth = unitGroupKey(unit);
+  document.getElementById('uc_booth').value = booth;
+  populateUserEquipmentSelect();
+  document.getElementById('uc_equipment').value = unit.id;
+  updateUcServiceIdVisibility();
+  toast(`${unit.name} selected — ready to log.`);
+  document.getElementById('uc_temp').focus();
+}
+document.getElementById('scanBarcodeBtn').addEventListener('click', openScanModal);
+document.getElementById('scanBarcodeBtnUser').addEventListener('click', openScanModal);
+document.getElementById('scanOverlay').addEventListener('click', e=>{ if(e.target.id==='scanOverlay') closeScanModal(); });
 
 function openCheckModal(unitId){
   checkingUnitId = unitId;
