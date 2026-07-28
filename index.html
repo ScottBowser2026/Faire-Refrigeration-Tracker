@@ -780,6 +780,13 @@
       <div id="scanReader" style="width:100%;"></div>
     </div>
     <div id="scanMsg" style="min-height:20px; font-size:13px; margin-top:10px; text-align:center;"></div>
+    <div id="scanLinkFlow" style="display:none; border-top:1px solid var(--border); margin-top:12px; padding-top:12px;">
+      <div class="field">
+        <label>This tag isn't linked to a unit yet — which one is it?</label>
+        <select id="scanLinkUnitSelect"></select>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" id="scanLinkConfirmBtn">Link Tag &amp; Continue</button>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeScanModal()">Cancel</button>
     </div>
@@ -2332,6 +2339,7 @@ async function openScanModal(mode){
   }
   scanBusy = false;
   document.getElementById('scanMsg').textContent = '';
+  document.getElementById('scanLinkFlow').style.display = 'none';
   document.getElementById('scanOverlay').classList.add('show');
   scanInstance = new Html5Qrcode('scanReader');
   try{
@@ -2364,18 +2372,54 @@ async function onScanSuccess(decodedText){
   }
   const match = findUnitByServiceId(decodedText);
   if(!match){
-    document.getElementById('scanMsg').innerHTML = `<span style="color:var(--flag);">No unit found with Barcode ID "${escapeHtml(decodedText)}" — check the tag, or ask an admin to add it under Edit Unit.</span>`;
-    scanBusy = false; // let them try scanning again
+    offerToLinkUnmatchedTag(decodedText);
     return;
   }
   await closeScanModal();
+  routeMatchedUnit(match);
+}
+function routeMatchedUnit(unit){
   if(isUserRole()){
-    routeScannedUnitToUserView(match);
+    routeScannedUnitToUserView(unit);
   } else if(isMaintenanceWorker()){
-    routeScannedUnitToMaintenance(match);
+    routeScannedUnitToMaintenance(unit);
   } else {
-    openCheckModal(match.id);
+    openCheckModal(unit.id);
   }
+}
+function unitsAvailableToLinkForCurrentRole(){
+  if(isUserRole()) return myPendingUnits();
+  if(isMaintenanceWorker()) return units.filter(u=>u.maintenanceTicket && (!u.maintenanceTicket.assignedToId || u.maintenanceTicket.assignedToId===currentUserId));
+  return units.slice(); // Admin/Superadmin can link any unit at this site
+}
+function offerToLinkUnmatchedTag(decodedText){
+  const candidates = unitsAvailableToLinkForCurrentRole().filter(u=>!u.barcodeId);
+  document.getElementById('scanMsg').innerHTML = `<span style="color:var(--flag);">No unit found with Barcode ID "${escapeHtml(decodedText)}".</span>`;
+  if(candidates.length===0){
+    document.getElementById('scanMsg').innerHTML += `<br><span style="color:#888;">No unlinked units available to you to match it to — ask an admin.</span>`;
+    scanBusy = false;
+    return;
+  }
+  const select = document.getElementById('scanLinkUnitSelect');
+  select.innerHTML = candidates
+    .sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b)) || a.name.localeCompare(b.name))
+    .map(u=>`<option value="${u.id}">${escapeHtml(unitGroupKey(u))} — ${escapeHtml(u.name)}</option>`).join('');
+  document.getElementById('scanLinkFlow').dataset.scannedText = decodedText;
+  document.getElementById('scanLinkFlow').style.display = 'block';
+  scanBusy = false; // allow scanning a different tag too, if they'd rather retry instead of linking
+}
+async function confirmLinkScannedTag(){
+  const flow = document.getElementById('scanLinkFlow');
+  const decodedText = flow.dataset.scannedText;
+  const unitId = document.getElementById('scanLinkUnitSelect').value;
+  const unit = units.find(u=>u.id===unitId);
+  if(!unit || !decodedText) return;
+  unit.barcodeId = decodedText.trim();
+  await persistUnits();
+  flow.style.display = 'none';
+  toast(`Tag linked to ${unit.name}.`);
+  await closeScanModal();
+  routeMatchedUnit(unit);
 }
 function routeScannedUnitToUserView(unit){
   const pending = myPendingUnits();
@@ -2406,6 +2450,7 @@ document.getElementById('scanBarcodeBtn').addEventListener('click', ()=>openScan
 document.getElementById('scanBarcodeBtnUser').addEventListener('click', ()=>openScanModal('lookup'));
 document.getElementById('scanBarcodeBtnMaint').addEventListener('click', ()=>openScanModal('lookup'));
 document.getElementById('scanToFillBarcodeBtn').addEventListener('click', ()=>openScanModal('fill'));
+document.getElementById('scanLinkConfirmBtn').addEventListener('click', confirmLinkScannedTag);
 document.getElementById('scanOverlay').addEventListener('click', e=>{ if(e.target.id==='scanOverlay') closeScanModal(); });
 
 function openCheckModal(unitId){
