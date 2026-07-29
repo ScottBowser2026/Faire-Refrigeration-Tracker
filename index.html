@@ -1390,7 +1390,7 @@ function visibleUnits(){
     if(status && statusOf(u)!==status) return false;
     if(search && !(u.name.toLowerCase().includes(search)||(u.location||'').toLowerCase().includes(search))) return false;
     return true;
-  }).sort((a,b)=>a.name.localeCompare(b.name));
+  }).sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b)) || a.name.localeCompare(b.name));
 }
 function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso); return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }
 
