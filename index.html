@@ -1388,7 +1388,7 @@ function visibleUnits(){
   return units.filter(u=>{
     if(type && u.type!==type) return false;
     if(status && statusOf(u)!==status) return false;
-    if(search && !(u.name.toLowerCase().includes(search)||(u.location||'').toLowerCase().includes(search))) return false;
+    if(search && !(u.name.toLowerCase().includes(search)||(u.location||'').toLowerCase().includes(search)||unitGroupKey(u).toLowerCase().includes(search))) return false;
     return true;
   }).sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b)) || a.name.localeCompare(b.name));
 }
