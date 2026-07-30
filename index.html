@@ -566,6 +566,14 @@
       <div style="font-weight:700; font-size:13px; margin-bottom:6px;">Entries / Notes</div>
       <div id="ticketEntriesList" style="max-height:220px; overflow-y:auto; margin-bottom:10px;"></div>
       <div class="field"><label>Add a note</label><textarea id="ticket_entry_note" rows="2" placeholder="What was checked or done today…"></textarea></div>
+      <div class="field">
+        <label>Actual reading while here <span class="hint">(optional — entering this logs a real check and updates this unit's live status)</span></label>
+        <div style="display:flex; gap:8px;">
+          <input type="number" id="ticket_entry_temp" placeholder="Temp °F" style="flex:1;">
+          <select id="ticket_entry_fans" style="flex:1;"><option value="">Fans?</option><option value="true">Fans OK</option><option value="false">Fans DOWN</option></select>
+          <select id="ticket_entry_compressor" style="flex:1;"><option value="">Compressor?</option><option value="true">Compressor OK</option><option value="false">Compressor DOWN</option></select>
+        </div>
+      </div>
       <div class="field"><label>Photo (optional)</label><input type="file" id="ticket_entry_photo" accept="image/*"></div>
       <button class="btn btn-outline" style="width:100%; margin-bottom:16px;" onclick="addTicketEntry()">Add Entry</button>
 
@@ -841,7 +849,10 @@
     <h2>Daily Report</h2>
     <div class="sub" id="dailyReportSub"></div>
     <div id="dailyReportBody" style="max-height:60vh; overflow-y:auto; margin:10px 0;"></div>
-    <div class="modal-actions"><button class="btn btn-outline" onclick="closeDailyReportModal()">Close</button></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeDailyReportModal()">Close</button>
+      <button class="btn btn-danger" id="restateReportBtn" style="display:none">Restate from History</button>
+    </div>
   </div>
 </div>
 
@@ -1588,12 +1599,42 @@ async function addTicketEntry(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
   const note = document.getElementById('ticket_entry_note').value.trim();
   const photoFile = document.getElementById('ticket_entry_photo').files[0];
-  if(!note){ toast('Add a note first.'); return; }
+  const tempVal = document.getElementById('ticket_entry_temp').value;
+  const fansVal = document.getElementById('ticket_entry_fans').value;
+  const compressorVal = document.getElementById('ticket_entry_compressor').value;
+  const hasReading = tempVal!=='' && fansVal!=='' && compressorVal!=='';
+  if(!note && !hasReading){ toast('Add a note, or fill in a full reading (temp + fans + compressor).'); return; }
+  if((tempVal!=='' || fansVal!=='' || compressorVal!=='') && !hasReading){
+    toast('To log a reading, fill in all three: temp, fans, and compressor.'); return;
+  }
   let photoDataUrl = null;
   if(photoFile){ if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; } photoDataUrl = await fileToDataUrl(photoFile); }
   if(!u.maintenanceTicket.entries) u.maintenanceTicket.entries = [];
-  u.maintenanceTicket.entries.push({ at:new Date().toISOString(), by:currentUser, note, photo:photoDataUrl });
-  await persistUnits(); renderTicketModal(); toast('Entry added.');
+  u.maintenanceTicket.entries.push({ at:new Date().toISOString(), by:currentUser, note: note || '(reading logged, no note)', photo:photoDataUrl });
+
+  let clearedNowInCompliance = false;
+  if(hasReading){
+    const temp = parseFloat(tempVal);
+    const fans = fansVal==='true';
+    const compressor = compressorVal==='true';
+    const now = new Date().toISOString();
+    u.currentTemp = temp; u.fansOperating = fans; u.compressorOperating = compressor; u.lastCheckBy = currentUser; u.lastCheckAt = now;
+    u.history = u.history || [];
+    u.history.push({ at:now, temp, fans, compressor, notes:`Maintenance check-in: ${note}`.trim(), by:currentUser, entryType:'check', photo:photoDataUrl });
+    if(u.history.length>500) u.history = u.history.slice(-500);
+    const keepPhotosFrom = Math.max(0, u.history.length-5);
+    u.history = u.history.map((h,i)=> i<keepPhotosFrom ? {...h, photo:null} : h);
+
+    if(statusOf(u)==='ok'){
+      u.clearedIncidents = u.clearedIncidents || [];
+      u.clearedIncidents.push({ at: now, clearedBy: currentUser, clearedAt: now, notes: `Auto-cleared — Maintenance confirmed ${temp}°F, fans ${fans?'ok':'DOWN'}, compressor ${compressor?'ok':'DOWN'} (in compliance).` });
+      clearedNowInCompliance = true;
+    }
+  }
+
+  await persistUnits(); renderTicketModal(); render(); renderFleetChart(); renderIncidents();
+  document.getElementById('ticket_entry_temp').value=''; document.getElementById('ticket_entry_fans').value=''; document.getElementById('ticket_entry_compressor').value='';
+  toast(clearedNowInCompliance ? 'Entry added — reading is in compliance, flag cleared.' : 'Entry added.');
 }
 async function addOutsideServiceCall(){
   const u = units.find(x=>x.id===ticketModalUnitId); if(!u || !u.maintenanceTicket) return;
@@ -2762,18 +2803,35 @@ async function sendMasterReport(){
 // ---- Daily Report (compiled snapshot + stubbed text-notification hook) ----
 function localDateKey(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
-function buildReportSnapshot(){
-  const flagged = units.filter(u=>statusOf(u)==='flag').map(u=>({ name:u.name, location:u.location||'', reasons: complianceReasons(u).join(', ')||'flagged' }));
-  const notChecked = units.filter(u=>(neverChecked(u)||isStale(u)) && !isMarkedOffToday(u)).map(u=>({
-    name:u.name, location:u.location||'',
-    assignedTo: (u.assignedUserNames && u.assignedUserNames.length) ? u.assignedUserNames.join(', ') : 'Unassigned'
-  }));
+function buildReportSnapshotForDate(dateKey){
+  const flagged = [], notChecked = [];
+  units.forEach(u=>{
+    const checksThatDay = (u.history||[]).filter(h=>(!h.entryType||h.entryType==='check') && localDateKeyFor(h.at)===dateKey);
+    if(checksThatDay.length===0){
+      if(!isMarkedOffForDate(u, dateKey)){
+        notChecked.push({ name:u.name, location:u.location||'', assignedTo:(u.assignedUserNames&&u.assignedUserNames.length)?u.assignedUserNames.join(', '):'Unassigned' });
+      }
+      return;
+    }
+    const last = checksThatDay.slice().sort((a,b)=>new Date(a.at)-new Date(b.at)).slice(-1)[0];
+    const bad = (last.fans===false)||(last.compressor===false)||(last.temp<u.tmin||last.temp>u.tmax);
+    if(bad){
+      const reasons = [];
+      if(last.fans===false) reasons.push('fans down');
+      if(last.compressor===false) reasons.push('compressor down');
+      if(last.temp<u.tmin||last.temp>u.tmax) reasons.push(`${last.temp}°F (target ${u.tmin}-${u.tmax}°F)`);
+      flagged.push({ name:u.name, location:u.location||'', reasons: reasons.join(', ')||'flagged' });
+    }
+  });
   const compliant = units.length - flagged.length - notChecked.length;
   return { flagged, notChecked, compliant };
 }
+function isMarkedOffForDate(u, dateKey){
+  return u.markedOffAt && localDateKeyFor(u.markedOffAt)===dateKey;
+}
 
 async function submitDailyReport(){
-  const snap = buildReportSnapshot();
+  const snap = buildReportSnapshotForDate(localDateKey());
   if(!confirm(`Submit today's report for ${SITES[currentSite].name}? ${snap.flagged.length} flagged, ${snap.notChecked.length} not checked, ${snap.compliant} compliant.`)) return;
   const report = {
     id: uid(), date: localDateKey(), submittedBy: currentUser, submittedAt: new Date().toISOString(), auto:false,
@@ -2824,7 +2882,7 @@ async function autoGenerateDailyReportIfDue(){
   const alreadyExists = dailyReports.some(r=>r.date===todayKey);
   if(alreadyExists) return;
   if(now.getHours()!==23 || now.getMinutes()<59) return; // only fires in the 11:59pm-midnight window
-  const snap = buildReportSnapshot();
+  const snap = buildReportSnapshotForDate(todayKey);
   const report = {
     id: uid(), date: todayKey, submittedBy: 'System (auto-generated, 11:59 PM)', submittedAt: now.toISOString(), auto:true,
     totalUnits: units.length, compliantCount: snap.compliant, flaggedCount: snap.flagged.length, notCheckedCount: snap.notChecked.length,
@@ -2879,7 +2937,7 @@ async function markReportRead(reportId){
 }
 function openDailyReportModal(reportId){
   const r = dailyReports.find(x=>x.id===reportId); if(!r) return;
-  document.getElementById('dailyReportSub').textContent = `${r.date} — ${r.auto?'auto-generated at 11:59 PM (nobody had submitted yet)':'submitted by '+r.submittedBy+' at '+fmtDate(r.submittedAt)}`;
+  document.getElementById('dailyReportSub').textContent = `${r.date} — ${r.auto?'auto-generated at 11:59 PM (nobody had submitted yet)':'submitted by '+r.submittedBy+' at '+fmtDate(r.submittedAt)}${r.restatedAt?` · restated by ${r.restatedBy} at ${fmtDate(r.restatedAt)}`:''}`;
   const body = document.getElementById('dailyReportBody');
   const checkedCount = r.totalUnits - r.notCheckedCount;
   const checkedPct = r.totalUnits ? Math.round((checkedCount/r.totalUnits)*100) : 0;
@@ -2918,9 +2976,32 @@ function openDailyReportModal(reportId){
     + `<div style="font-family:var(--mono); font-size:12px; color:#777; padding-top:6px;">${r.totalUnits} total units in the system at submission time.</div>`
     + readSection;
   document.getElementById('dailyReportOverlay').classList.add('show');
+  const restateBtn = document.getElementById('restateReportBtn');
+  restateBtn.style.display = isSuperadmin() ? 'inline-block' : 'none';
+  restateBtn.dataset.reportId = r.id;
   markReportRead(reportId);
 }
 function closeDailyReportModal(){ document.getElementById('dailyReportOverlay').classList.remove('show'); }
+async function restateReport(){
+  if(!isSuperadmin()) return;
+  const reportId = document.getElementById('restateReportBtn').dataset.reportId;
+  const r = dailyReports.find(x=>x.id===reportId); if(!r) return;
+  if(!confirm(`Recalculate ${r.date}'s report from each unit's actual history for that day? This overwrites the stored counts — cannot be undone.`)) return;
+  const snap = buildReportSnapshotForDate(r.date);
+  r.totalUnits = units.length;
+  r.compliantCount = snap.compliant;
+  r.flaggedCount = snap.flagged.length;
+  r.notCheckedCount = snap.notChecked.length;
+  r.flaggedUnits = snap.flagged;
+  r.notCheckedUnits = snap.notChecked;
+  r.restatedAt = new Date().toISOString();
+  r.restatedBy = currentUser;
+  await persistDailyReports();
+  renderDailyReportsList();
+  openDailyReportModal(r.id);
+  toast(`${r.date} restated from history.`);
+}
+document.getElementById('restateReportBtn').addEventListener('click', restateReport);
 document.getElementById('submitDailyReportBtn').addEventListener('click', submitDailyReport);
 
 function renderFleetChart(){
