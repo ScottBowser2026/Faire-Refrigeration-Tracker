@@ -564,6 +564,7 @@
       </div>
 
       <div style="font-weight:700; font-size:13px; margin-bottom:6px;">Entries / Notes</div>
+      <div id="ticketFlagPrompt" style="display:none; background:var(--flag-bg,#f5e2dd); color:var(--flag); border-radius:8px; padding:10px 12px; font-size:13px; margin-bottom:10px; font-weight:600;"></div>
       <div id="ticketEntriesList" style="max-height:220px; overflow-y:auto; margin-bottom:10px;"></div>
       <div class="field"><label>Add a note</label><textarea id="ticket_entry_note" rows="2" placeholder="What was checked or done today…"></textarea></div>
       <div class="field">
@@ -1517,6 +1518,15 @@ function renderTicketModal(){
   document.getElementById('ticketModalSub').textContent = `Opened ${fmtDate(ticket.openedAt)} by ${ticket.openedBy}`;
   document.getElementById('ticketReasonDisplay').textContent = ticket.reason;
   document.getElementById('ticket_progress_status').value = ticket.progressStatus || '';
+  const flagPrompt = document.getElementById('ticketFlagPrompt');
+  if(flagPrompt){
+    if(statusOf(u)==='flag'){
+      flagPrompt.innerHTML = `⚠ This unit is currently flagged (${complianceReasons(u).join(', ')||'out of compliance'}). Record an actual reading below — if it comes back in range, add service notes describing the fix and the alert will clear.`;
+      flagPrompt.style.display = 'block';
+    } else {
+      flagPrompt.style.display = 'none';
+    }
+  }
 
   const assigneeWrap = document.getElementById('ticketAssigneeWrap');
   assigneeWrap.style.display = isSiteAdmin() ? 'block' : 'none';
@@ -1606,6 +1616,22 @@ async function addTicketEntry(){
   if(!note && !hasReading){ toast('Add a note, or fill in a full reading (temp + fans + compressor).'); return; }
   if((tempVal!=='' || fansVal!=='' || compressorVal!=='') && !hasReading){
     toast('To log a reading, fill in all three: temp, fans, and compressor.'); return;
+  }
+  // If the unit is currently flagged, a reading is required — a note alone can't
+  // close out a live compliance issue without someone actually measuring it.
+  if(!hasReading && statusOf(u)==='flag'){
+    toast('This unit is flagged — record the actual temp, fans, and compressor reading before adding an entry.');
+    return;
+  }
+  // And a reading that would clear the flag needs service notes explaining what
+  // was done, so the fix is documented rather than just silently disappearing.
+  if(hasReading && !note){
+    const wouldClear = !(fansVal==='false' || compressorVal==='false' || parseFloat(tempVal)<u.tmin || parseFloat(tempVal)>u.tmax);
+    if(wouldClear && statusOf(u)==='flag'){
+      toast('That reading clears the alert — add service notes describing what was done before saving.');
+      document.getElementById('ticket_entry_note').focus();
+      return;
+    }
   }
   let photoDataUrl = null;
   if(photoFile){ if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; } photoDataUrl = await fileToDataUrl(photoFile); }
