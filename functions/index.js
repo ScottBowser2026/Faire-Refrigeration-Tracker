@@ -4,30 +4,23 @@
  * Two scheduled functions, one per timezone group, each firing at 11:59 PM
  * local time for the sites in that group. This runs server-side on Firebase's
  * infrastructure, so it fires every day whether or not anyone has the app open —
- * unlike the client-side fallback already in index.html, which only catches it
- * if a browser tab happens to be open around that time.
+ * unlike the client-side fallback in index.html, which only catches it if a
+ * browser tab happens to be open around that time.
  *
- * Both functions do the exact same thing, just for different site lists /
- * timezones:
- *   1. Read that site's units + existing dailyReports.
- *   2. If a report for "today" (in that site's local timezone) already exists —
- *      submitted manually, or already auto-generated — do nothing.
- *   3. Otherwise, build the same snapshot the app itself builds (flagged /
- *      not-checked-with-assignee / compliant counts) and write it, tagged as
- *      auto-generated so it's clearly distinguishable in the UI.
+ * IMPORTANT (fixed): "checked" and "compliant" are determined by scanning each
+ * unit's actual history log for entries dated on the target day — NOT by a
+ * rolling 12-hour staleness window. A unit checked at 9 AM is already >12 hours
+ * old by 11:59 PM, so the old staleness-based approach wrongly counted normal
+ * morning checks as "not checked." This version looks at each unit's history
+ * for that specific calendar day instead, matching the client-side fix.
  *
- * DEPLOYMENT NOTE: scheduled functions require the Blaze (pay-as-you-go) plan —
- * the free Spark plan can't run Cloud Scheduler jobs. Cost for this workload is
- * negligible (a few invocations a day, no heavy compute), but the project does
- * need to be upgraded first if it isn't already.
+ * DEPLOYMENT NOTE: scheduled functions require the Blaze (pay-as-you-go) plan.
  */
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 admin.initializeApp();
 const db = admin.database();
-
-const STALE_HOURS = 12;
 
 // Map each site to its real-world local timezone (IANA name).
 const SITE_TIMEZONES = {
@@ -48,35 +41,56 @@ function localDateKeyInTz(date, tz) {
   return `${y}-${m}-${d}`;
 }
 
-function isMarkedOffToday(u, todayKey, tz) {
+function isMarkedOffForDate(u, dateKey, tz) {
   if (!u.markedOffAt) return false;
-  return localDateKeyInTz(new Date(u.markedOffAt), tz) === todayKey;
-}
-function neverChecked(u) {
-  return !u.lastCheckAt;
-}
-function isStale(u) {
-  if (!u.lastCheckAt) return true;
-  return Date.now() - new Date(u.lastCheckAt).getTime() > STALE_HOURS * 3600 * 1000;
-}
-function statusOf(u) {
-  if (u.currentTemp == null || u.fansOperating == null) return "unset";
-  if (u.fansOperating === false) return "flag";
-  if (u.compressorOperating === false) return "flag";
-  if (u.currentTemp < u.tmin || u.currentTemp > u.tmax) return "flag";
-  return "ok";
-}
-function complianceReasons(u) {
-  const reasons = [];
-  if (u.fansOperating === false) reasons.push("fans down");
-  if (u.compressorOperating === false) reasons.push("compressor down");
-  if (u.currentTemp != null && (u.currentTemp < u.tmin || u.currentTemp > u.tmax)) {
-    reasons.push(`${u.currentTemp}°F (target ${u.tmin}-${u.tmax}°F)`);
-  }
-  return reasons;
+  return localDateKeyInTz(new Date(u.markedOffAt), tz) === dateKey;
 }
 function uid() {
   return "u_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+// Builds the same "checked / flagged / compliant" breakdown as the client,
+// but scoped to a specific calendar day using each unit's history — not the
+// unit's live current-state fields (which only reflect the most recent check,
+// whenever that was).
+function buildSnapshotForDate(units, dateKey, tz) {
+  const flagged = [];
+  const notChecked = [];
+
+  units.forEach((u) => {
+    const checksThatDay = (u.history || []).filter((h) => {
+      if (h.entryType && h.entryType !== "check") return false;
+      return localDateKeyInTz(new Date(h.at), tz) === dateKey;
+    });
+
+    if (checksThatDay.length === 0) {
+      if (!isMarkedOffForDate(u, dateKey, tz)) {
+        notChecked.push({
+          name: u.name,
+          location: u.location || "",
+          assignedTo:
+            u.assignedUserNames && u.assignedUserNames.length
+              ? u.assignedUserNames.join(", ")
+              : "Unassigned",
+        });
+      }
+      return;
+    }
+
+    // Use the last check of that day to judge compliance for that day.
+    const last = checksThatDay.slice().sort((a, b) => new Date(a.at) - new Date(b.at)).slice(-1)[0];
+    const bad = last.fans === false || last.compressor === false || last.temp < u.tmin || last.temp > u.tmax;
+    if (bad) {
+      const reasons = [];
+      if (last.fans === false) reasons.push("fans down");
+      if (last.compressor === false) reasons.push("compressor down");
+      if (last.temp < u.tmin || last.temp > u.tmax) reasons.push(`${last.temp}°F (target ${u.tmin}-${u.tmax}°F)`);
+      flagged.push({ name: u.name, location: u.location || "", reasons: reasons.join(", ") || "flagged" });
+    }
+  });
+
+  const compliant = units.length - flagged.length - notChecked.length;
+  return { flagged, notChecked, compliant };
 }
 
 async function generateReportForSite(siteKey, tz) {
@@ -96,26 +110,7 @@ async function generateReportForSite(siteKey, tz) {
     return;
   }
 
-  const flagged = units
-    .filter((u) => statusOf(u) === "flag")
-    .map((u) => ({
-      name: u.name,
-      location: u.location || "",
-      reasons: complianceReasons(u).join(", ") || "flagged",
-    }));
-
-  const notChecked = units
-    .filter((u) => (neverChecked(u) || isStale(u)) && !isMarkedOffToday(u, todayKey, tz))
-    .map((u) => ({
-      name: u.name,
-      location: u.location || "",
-      assignedTo:
-        u.assignedUserNames && u.assignedUserNames.length
-          ? u.assignedUserNames.join(", ")
-          : "Unassigned",
-    }));
-
-  const compliant = units.length - flagged.length - notChecked.length;
+  const snap = buildSnapshotForDate(units, todayKey, tz);
 
   const report = {
     id: uid(),
@@ -124,15 +119,15 @@ async function generateReportForSite(siteKey, tz) {
     submittedAt: new Date().toISOString(),
     auto: true,
     totalUnits: units.length,
-    compliantCount: compliant,
-    flaggedCount: flagged.length,
-    notCheckedCount: notChecked.length,
-    flaggedUnits: flagged,
-    notCheckedUnits: notChecked,
+    compliantCount: snap.compliant,
+    flaggedCount: snap.flagged.length,
+    notCheckedCount: snap.notChecked.length,
+    flaggedUnits: snap.flagged,
+    notCheckedUnits: snap.notChecked,
   };
 
   await reportsRef.child(report.id).set(report);
-  console.log(`[${siteKey}] Auto-generated report for ${todayKey}: ${flagged.length} flagged, ${notChecked.length} not checked, ${compliant} compliant.`);
+  console.log(`[${siteKey}] Auto-generated report for ${todayKey}: ${snap.flagged.length} flagged, ${snap.notChecked.length} not checked, ${snap.compliant} compliant.`);
 }
 
 async function runGroup(group) {
