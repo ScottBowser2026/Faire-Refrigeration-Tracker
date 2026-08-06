@@ -329,7 +329,7 @@
       </div>
       <div id="uc_tempFieldsWrap">
         <div class="two-col">
-          <div class="field"><label>Temperature (°F)</label><input type="text" id="uc_temp" inputmode="decimal"></div>
+          <div class="field"><label>Temperature (°F)</label><input type="text" id="uc_temp" inputmode="text" placeholder="e.g. 38 or -5"></div>
           <div class="field"><label>Fans operating?</label><select id="uc_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
         </div>
         <div class="field"><label>Compressor running?</label><select id="uc_compressor"><option value="true">Yes</option><option value="false">No — down</option></select></div>
@@ -508,8 +508,8 @@
     </div>
     <div class="field"><label>Assigned Users <span class="hint">(any of them can check it — first one to log it clears it for everyone)</span></label><select id="u_assigned_user" multiple size="4" style="height:auto;"></select></div>
     <div class="two-col">
-      <div class="field"><label>Target min °F</label><input type="text" id="u_tmin"></div>
-      <div class="field"><label>Target max °F</label><input type="text" id="u_tmax"></div>
+      <div class="field"><label>Target min °F</label><input type="text" id="u_tmin" inputmode="text" placeholder="e.g. 33 or -10"></div>
+      <div class="field"><label>Target max °F</label><input type="text" id="u_tmax" inputmode="text" placeholder="e.g. 40 or 0"></div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeUnitModal()">Cancel</button>
@@ -574,7 +574,7 @@
       <div class="field">
         <label>Actual reading while here <span class="hint">(optional — entering this logs a real check and updates this unit's live status)</span></label>
         <div style="display:flex; gap:8px;">
-          <input type="number" id="ticket_entry_temp" placeholder="Temp °F" style="flex:1;">
+          <input type="text" id="ticket_entry_temp" inputmode="text" placeholder="Temp °F (e.g. -5)" style="flex:1;">
           <select id="ticket_entry_fans" style="flex:1;"><option value="">Fans?</option><option value="true">Fans OK</option><option value="false">Fans DOWN</option></select>
           <select id="ticket_entry_compressor" style="flex:1;"><option value="">Compressor?</option><option value="true">Compressor OK</option><option value="false">Compressor DOWN</option></select>
         </div>
@@ -739,7 +739,7 @@
     </div>
     <div id="tempFieldsWrap">
       <div class="two-col">
-        <div class="field"><label>Temperature (°F)</label><input type="text" id="c_temp" inputmode="decimal"></div>
+        <div class="field"><label>Temperature (°F)</label><input type="text" id="c_temp" inputmode="text" placeholder="e.g. 38 or -5"></div>
         <div class="field"><label>Fans operating?</label><select id="c_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
       </div>
       <div class="field"><label>Compressor running?</label><select id="c_compressor"><option value="true">Yes</option><option value="false">No — down</option></select></div>
