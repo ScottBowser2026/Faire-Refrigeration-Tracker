@@ -1634,7 +1634,7 @@ async function addTicketEntry(){
     }
   }
   let photoDataUrl = null;
-  if(photoFile){ if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; } photoDataUrl = await fileToDataUrl(photoFile); }
+  if(photoFile){ photoDataUrl = await fileToDataUrl(photoFile); }
   if(!u.maintenanceTicket.entries) u.maintenanceTicket.entries = [];
   u.maintenanceTicket.entries.push({ at:new Date().toISOString(), by:currentUser, note: note || '(reading logged, no note)', photo:photoDataUrl });
 
@@ -1674,7 +1674,6 @@ async function addOutsideServiceCall(){
   if(!vendor || !cost){ toast('Enter at least a vendor and cost.'); return; }
   let photoDataUrl = null;
   if(photoFile){
-    if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; }
     photoDataUrl = await fileToDataUrl(photoFile);
   }
   if(!u.maintenanceTicket.outsideServiceCalls) u.maintenanceTicket.outsideServiceCalls = [];
@@ -1813,7 +1812,6 @@ async function submitUserCheck(){
   const photoFile = document.getElementById('uc_photo').files[0];
   let photoDataUrl = null;
   if(photoFile){
-    if(photoFile.size>900*1024){ msg.style.color='var(--flag)'; msg.textContent='Photo too large — use one under ~900KB.'; return; }
     photoDataUrl = await fileToDataUrl(photoFile);
   }
   if(type==='check'){
@@ -1874,7 +1872,6 @@ async function savePriorRepair(){
   const photoFile = document.getElementById('pr_photo').files[0];
   let photoDataUrl = null;
   if(photoFile){
-    if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; }
     photoDataUrl = await fileToDataUrl(photoFile);
   }
   const now = new Date().toISOString();
@@ -2640,14 +2637,54 @@ function updateTempFieldsVisibility(){
   document.getElementById('serviceIdWrap').style.display = (type==='check' && u && !u.serviceId) ? 'block' : 'none';
 }
 document.getElementById('c_type').addEventListener('change', updateTempFieldsVisibility);
-function fileToDataUrl(file){ return new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(r.result); r.onerror=reject; r.readAsDataURL(file); }); }
+// Shrinks and re-encodes a photo in the browser before it's stored. Photos are
+// saved as base64 text directly in the database, so a raw 3-5MB iPhone shot would
+// bloat the record badly. This resizes to fit within maxDim and steps the JPEG
+// quality down until it lands under targetBytes, so people can upload straight
+// from their phone camera without hitting a size error.
+function fileToDataUrl(file, maxDim = 1200, targetBytes = 700 * 1024){
+  return new Promise((resolve, reject) => {
+    // Non-images (or anything we can't decode) fall back to a plain read.
+    if(!file.type || !file.type.startsWith('image/')){
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = e => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let { width, height } = img;
+        if(width > height && width > maxDim){ height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else if(height > maxDim){ width = Math.round(width * (maxDim / height)); height = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        let quality = 0.7;
+        let out = canvas.toDataURL('image/jpeg', quality);
+        // Rough base64 -> bytes estimate; step quality down if still too big.
+        while(out.length * 0.75 > targetBytes && quality > 0.3){
+          quality -= 0.1;
+          out = canvas.toDataURL('image/jpeg', quality);
+        }
+        resolve(out);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 async function saveCheck(){
   const u = units.find(x=>x.id===checkingUnitId); if(!u) return;
   const type = document.getElementById('c_type').value;
   const notes = document.getElementById('c_notes').value.trim();
   const photoFile = document.getElementById('c_photo').files[0];
   let photoDataUrl = null;
-  if(photoFile){ if(photoFile.size>900*1024){ toast('Photo too large — use one under ~900KB.'); return; } photoDataUrl = await fileToDataUrl(photoFile); }
+  if(photoFile){ photoDataUrl = await fileToDataUrl(photoFile); }
   if(type==='check'){
     if(!u.serviceId){
       const serviceId = document.getElementById('c_service_id').value.trim();
