@@ -309,10 +309,6 @@
       <div class="ticket-sub">Time &amp; temperature verification</div>
 
       <button class="btn btn-outline" style="width:100%; margin-bottom:12px;" id="scanBarcodeBtnUser">📷 Scan Barcode to Select Unit</button>
-      <label id="uc_showAllWrap" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:13.5px; cursor:pointer;">
-        <input type="checkbox" id="uc_show_all" style="width:18px; height:18px;">
-        <span>Show units I've already checked today <span class="hint">(to re-temp)</span></span>
-      </label>
       <div class="field"><label>Booth</label><select id="uc_booth"></select></div>
       <div class="field"><label>Equipment</label><select id="uc_equipment" disabled><option value="">Select booth first…</option></select></div>
       <div class="field"><label>Entry type</label>
@@ -1765,10 +1761,7 @@ function myAllAssignedUnits(){
   // happened to log the first reading.
   return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isUnitOff(u) && !isMarkedOffToday(u));
 }
-function ucShowAllUnits(){
-  const cb = document.getElementById('uc_show_all');
-  return !!(cb && cb.checked);
-}
+
 function myOffAssignedUnits(){
   // Units assigned to me that are currently off — either shut down via Runtime,
   // or marked off for today. Anyone assigned can turn one back on.
@@ -1778,7 +1771,9 @@ function ucSelectableUnits(){
   if(document.getElementById('uc_type') && document.getElementById('uc_type').value==='on'){
     return myOffAssignedUnits();
   }
-  return ucShowAllUnits() ? myAllAssignedUnits() : myPendingUnits();
+  // Always list every assigned in-service unit — people can log a unit as many
+  // times a day as they need, so already-checked units stay selectable.
+  return myAllAssignedUnits();
 }
 function isUnitOff(u){ return u.runtime==='off'; }
 function unitGroupKey(u){ return (u.booth||'').trim() || (u.location||'').trim() || 'Ungrouped'; }
@@ -1820,10 +1815,15 @@ function renderUserWorkerList(){
   if(!isUserRole()) return;
   renderUserOffUnits();
   const pending = ucSelectableUnits();
+  const stillDue = myPendingUnits().length;
+  const sub = document.querySelector('#userWorkerView .ticket-sub');
+  if(sub) sub.textContent = stillDue>0
+    ? `Time & temperature verification · ${stillDue} still to check today`
+    : 'Time & temperature verification · all checked today — log again anytime';
   const boothSel = document.getElementById('uc_booth');
   const anyAssigned = units.some(u=>(u.assignedUserIds||[]).includes(currentUserId));
   if(pending.length===0){
-    boothSel.innerHTML = `<option value="">${anyAssigned ? "All caught up for today!" : "No booths assigned to you yet"}</option>`;
+    boothSel.innerHTML = `<option value="">${anyAssigned ? "All your units are currently off" : "No booths assigned to you yet"}</option>`;
     boothSel.disabled = true;
     document.getElementById('uc_equipment').innerHTML = `<option value="">—</option>`;
     document.getElementById('uc_equipment').disabled = true;
@@ -1855,13 +1855,10 @@ function updateUcServiceIdVisibility(){
 }
 document.getElementById('uc_equipment').addEventListener('change', updateUcServiceIdVisibility);
 document.getElementById('uc_booth').addEventListener('change', populateUserEquipmentSelect);
-document.getElementById('uc_show_all').addEventListener('change', renderUserWorkerList);
 function updateUcTypeVisibility(){
   const type = document.getElementById('uc_type').value;
   document.getElementById('uc_tempFieldsWrap').style.display = type==='check' ? 'block' : 'none';
   document.getElementById('uc_performedByWrap').style.display = type==='repair' ? 'block' : 'none';
-  const showAllWrap = document.getElementById('uc_showAllWrap');
-  if(showAllWrap) showAllWrap.style.display = type==='on' ? 'none' : 'flex';
 }
 // Changing the entry type changes which units are selectable (e.g. "Turn unit
 // back ON" needs to list off units, which are hidden from every other view).
@@ -1927,13 +1924,13 @@ async function submitUserCheck(){
     if(type==='repair') entry.performedBy = document.getElementById('uc_performedby').value;
     u.history.push(entry);
   }
-  const wasRecheck = type==='check' && ucShowAllUnits();
+  const wasRecheck = type==='check' && isCheckedToday(u);
   await persistUnits();
   render(); renderFleetChart(); renderIncidents();
   setUcDefaults();
   renderUserWorkerList();
   msg.style.color='var(--ok)';
-  msg.textContent = wasRecheck ? `Submitted — new reading logged for ${u.name}.` : `Submitted — ${u.name} cleared from your list.`;
+  msg.textContent = wasRecheck ? `Submitted — additional reading logged for ${u.name}.` : `Submitted — ${u.name} checked.`;
 }
 
 // ---- Add Prior Repair (backfill historical repairs directly into closed history) ----
@@ -2679,7 +2676,6 @@ function routeScannedUnitToUserView(unit){
     toast(`${unit.name} isn't assigned to you — ask an admin if you need access to log it.`);
     return;
   }
-  document.getElementById('uc_show_all').checked = true;
   renderUserWorkerList();
   const booth = unitGroupKey(unit);
   document.getElementById('uc_booth').value = booth;
