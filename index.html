@@ -1760,6 +1760,9 @@ function myPendingUnits(){
 // someone wants to re-temp a unit later in the day (temps drift, a cooler gets
 // propped open, a repair happens, etc.).
 function myAllAssignedUnits(){
+  // Units assigned to me, including ones already checked today — so anyone
+  // assigned to a unit can re-temp it later in the day, not just whoever
+  // happened to log the first reading.
   return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isUnitOff(u) && !isMarkedOffToday(u));
 }
 function ucShowAllUnits(){
@@ -1768,7 +1771,7 @@ function ucShowAllUnits(){
 }
 function myOffAssignedUnits(){
   // Units assigned to me that are currently off — either shut down via Runtime,
-  // or marked off for today. Needed so crew can turn them back on themselves.
+  // or marked off for today. Anyone assigned can turn one back on.
   return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && (isUnitOff(u)||isMarkedOffToday(u)));
 }
 function ucSelectableUnits(){
@@ -2668,13 +2671,15 @@ async function confirmLinkScannedTag(){
   routeMatchedUnit(unit);
 }
 function routeScannedUnitToUserView(unit){
-  if(!myAllAssignedUnits().some(u=>u.id===unit.id)){
+  if(isUnitOff(unit) || isMarkedOffToday(unit)){
+    toast(`${unit.name} is currently off — turn it back on first to log a reading.`);
+    return;
+  }
+  if(!(unit.assignedUserIds||[]).includes(currentUserId)){
     toast(`${unit.name} isn't assigned to you — ask an admin if you need access to log it.`);
     return;
   }
-  // If they scanned something already checked today, flip on the re-temp view
-  // automatically so the unit is actually selectable in the dropdown.
-  if(isCheckedToday(unit)) document.getElementById('uc_show_all').checked = true;
+  document.getElementById('uc_show_all').checked = true;
   renderUserWorkerList();
   const booth = unitGroupKey(unit);
   document.getElementById('uc_booth').value = booth;
