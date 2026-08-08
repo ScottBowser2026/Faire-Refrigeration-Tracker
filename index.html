@@ -322,6 +322,7 @@
           <option value="repair">Repair</option>
           <option value="cleaning">Cleaning</option>
           <option value="off">Unit is off</option>
+          <option value="on">Turn unit back ON</option>
         </select>
       </div>
       <div id="uc_serviceIdWrap" style="display:none;">
@@ -494,7 +495,7 @@
         <option value="glycol-chiller">Glycol Chiller</option>
         <option value="other">Other</option>
       </select></div>
-      <div class="field"><label>Runtime</label><select id="u_runtime"><option value="always">Always on</option><option value="seasonal">Seasonal</option></select></div>
+      <div class="field"><label>Runtime</label><select id="u_runtime"><option value="always">Always on</option><option value="seasonal">Seasonal</option><option value="off">Off / Out of service</option></select></div>
     </div>
     <div class="field"><label>Booth <span class="hint">(groups equipment together — e.g. "Turkey Leg Tavern". Start typing to see existing booths.)</span></label><input type="text" id="u_booth" list="boothDatalist"><datalist id="boothDatalist"></datalist></div>
     <div class="field"><label>Location <span class="hint">(more specific placement within the booth, optional)</span></label><input type="text" id="u_location"></div>
@@ -1162,6 +1163,7 @@ async function persistSuperadmins(){ await refSuperadmins.set(arrayToObj(superad
 
 function isMarkedOffToday(u){ return u.markedOffAt && localDateKeyFor(u.markedOffAt)===localDateKey(); }
 function statusOf(u){
+  if(isUnitOff(u)) return "off";
   if(isMarkedOffToday(u)) return "off";
   if(u.currentTemp===null||u.currentTemp===undefined||u.fansOperating===null||u.fansOperating===undefined) return "unset";
   if(u.fansOperating===false) return "flag";
@@ -1416,8 +1418,8 @@ function render(){
   document.getElementById('statOk').textContent = units.filter(u=>statusOf(u)==='ok').length;
   document.getElementById('statFlag').textContent = units.filter(u=>statusOf(u)==='flag').length;
   document.getElementById('statUnset').textContent = units.filter(u=>statusOf(u)==='unset').length;
-  document.getElementById('statTotal').textContent = units.length;
-  const eligibleForChecking = units.filter(u=>!isMarkedOffToday(u));
+  document.getElementById('statTotal').textContent = units.filter(u=>!isUnitOff(u)).length;
+  const eligibleForChecking = units.filter(u=>!isUnitOff(u) && !isMarkedOffToday(u));
   const checkedOnSchedule = eligibleForChecking.filter(u=>!neverChecked(u) && !isStale(u)).length;
   document.getElementById('statCheckedPct').textContent = eligibleForChecking.length ? Math.round((checkedOnSchedule/eligibleForChecking.length)*100)+'%' : '—';
   if(list.length===0){ grid.innerHTML = `<div style="color:#888; font-size:13.5px; padding:20px 0;">No units match this filter.</div>`; return; }
@@ -1745,21 +1747,30 @@ function renderMaintenanceWorkerList(){
 }
 
 function myPendingUnits(){
-  return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isCheckedToday(u) && !isMarkedOffToday(u));
+  return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isUnitOff(u) && !isCheckedToday(u) && !isMarkedOffToday(u));
 }
 // All units assigned to me, including ones already checked today — used when
 // someone wants to re-temp a unit later in the day (temps drift, a cooler gets
 // propped open, a repair happens, etc.).
 function myAllAssignedUnits(){
-  return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isMarkedOffToday(u));
+  return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && !isUnitOff(u) && !isMarkedOffToday(u));
 }
 function ucShowAllUnits(){
   const cb = document.getElementById('uc_show_all');
   return !!(cb && cb.checked);
 }
+function myOffAssignedUnits(){
+  // Units assigned to me that are currently off — either shut down via Runtime,
+  // or marked off for today. Needed so crew can turn them back on themselves.
+  return units.filter(u=>(u.assignedUserIds||[]).includes(currentUserId) && (isUnitOff(u)||isMarkedOffToday(u)));
+}
 function ucSelectableUnits(){
+  if(document.getElementById('uc_type') && document.getElementById('uc_type').value==='on'){
+    return myOffAssignedUnits();
+  }
   return ucShowAllUnits() ? myAllAssignedUnits() : myPendingUnits();
 }
+function isUnitOff(u){ return u.runtime==='off'; }
 function unitGroupKey(u){ return (u.booth||'').trim() || (u.location||'').trim() || 'Ungrouped'; }
 function unitTicketCount(u){ return (u.maintenanceHistory||[]).length + (u.maintenanceTicket?1:0); }
 function renderUserWorkerList(){
@@ -1805,7 +1816,11 @@ function updateUcTypeVisibility(){
   const type = document.getElementById('uc_type').value;
   document.getElementById('uc_tempFieldsWrap').style.display = type==='check' ? 'block' : 'none';
   document.getElementById('uc_performedByWrap').style.display = type==='repair' ? 'block' : 'none';
+  document.getElementById('uc_showAllWrap').style.display = type==='on' ? 'none' : 'flex';
 }
+// Changing the entry type changes which units are selectable (e.g. "Turn unit
+// back ON" needs to list off units, which are hidden from every other view).
+document.getElementById('uc_type').addEventListener('change', renderUserWorkerList);
 document.getElementById('uc_type').addEventListener('change', updateUcTypeVisibility);
 function setUcDefaults(){
   document.getElementById('uc_checkedby').value = currentUser || '';
@@ -1846,6 +1861,14 @@ async function submitUserCheck(){
     u.currentTemp=temp; u.fansOperating=fans; u.compressorOperating=compressor; u.lastCheckBy=currentUser; u.lastCheckAt=new Date().toISOString();
     if(!u.history) u.history=[];
     u.history.push({ at:u.lastCheckAt, temp, fans, compressor, notes:notes||null, photo:photoDataUrl, by:currentUser, entryType:'check' });
+  } else if(type==='on'){
+    const wasRuntimeOff = isUnitOff(u);
+    if(!confirm(`Turn "${u.name}" back ON? It'll go back into the normal daily check rotation.`)) return;
+    const onAt = new Date().toISOString();
+    u.markedOffAt = null; u.markedOffBy = null;
+    if(wasRuntimeOff) u.runtime = 'seasonal';
+    if(!u.history) u.history=[];
+    u.history.push({ at:onAt, temp:null, fans:null, notes: notes || (wasRuntimeOff?'Turned back on (was out of service)':'Turned back on'), photo:photoDataUrl, by:currentUser, entryType:'on' });
   } else if(type==='off'){
     if(!confirm(`Confirm: mark "${u.name}" as OFF for today? It won't need a compliance check until tomorrow.`)) return;
     const offAt = new Date().toISOString();
@@ -1859,11 +1882,13 @@ async function submitUserCheck(){
     if(type==='repair') entry.performedBy = document.getElementById('uc_performedby').value;
     u.history.push(entry);
   }
+  const wasRecheck = type==='check' && ucShowAllUnits();
   await persistUnits();
   render(); renderFleetChart(); renderIncidents();
   setUcDefaults();
   renderUserWorkerList();
-  msg.style.color='var(--ok)'; msg.textContent = `Submitted — ${u.name} cleared from your list.`;
+  msg.style.color='var(--ok)';
+  msg.textContent = wasRecheck ? `Submitted — new reading logged for ${u.name}.` : `Submitted — ${u.name} cleared from your list.`;
 }
 
 // ---- Add Prior Repair (backfill historical repairs directly into closed history) ----
@@ -2890,7 +2915,10 @@ function localDateKey(){ const d=new Date(); return `${d.getFullYear()}-${String
 
 function buildReportSnapshotForDate(dateKey){
   const flagged = [], notChecked = [];
-  units.forEach(u=>{
+  // Units set to Off / Out of service are excluded from compliance entirely —
+  // they're not expected to be checked, so they shouldn't drag down the numbers.
+  const inService = units.filter(u=>!isUnitOff(u));
+  inService.forEach(u=>{
     const checksThatDay = (u.history||[]).filter(h=>(!h.entryType||h.entryType==='check') && localDateKeyFor(h.at)===dateKey);
     if(checksThatDay.length===0){
       if(!isMarkedOffForDate(u, dateKey)){
@@ -2908,8 +2936,8 @@ function buildReportSnapshotForDate(dateKey){
       flagged.push({ name:u.name, location:u.location||'', reasons: reasons.join(', ')||'flagged' });
     }
   });
-  const compliant = units.length - flagged.length - notChecked.length;
-  return { flagged, notChecked, compliant };
+  const compliant = inService.length - flagged.length - notChecked.length;
+  return { flagged, notChecked, compliant, totalInService: inService.length };
 }
 function isMarkedOffForDate(u, dateKey){
   return u.markedOffAt && localDateKeyFor(u.markedOffAt)===dateKey;
