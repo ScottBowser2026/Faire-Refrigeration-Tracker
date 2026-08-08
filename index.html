@@ -309,7 +309,7 @@
       <div class="ticket-sub">Time &amp; temperature verification</div>
 
       <button class="btn btn-outline" style="width:100%; margin-bottom:12px;" id="scanBarcodeBtnUser">📷 Scan Barcode to Select Unit</button>
-      <label style="display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:13.5px; cursor:pointer;">
+      <label id="uc_showAllWrap" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:13.5px; cursor:pointer;">
         <input type="checkbox" id="uc_show_all" style="width:18px; height:18px;">
         <span>Show units I've already checked today <span class="hint">(to re-temp)</span></span>
       </label>
@@ -345,6 +345,13 @@
 
       <button class="btn btn-primary" style="width:100%; padding:12px;" onclick="submitUserCheck()">Submit Check</button>
       <div id="uc_msg" style="font-size:12.5px; margin-top:8px; text-align:center;"></div>
+    </div>
+
+    <div class="ticket-card" id="userOffUnitsCard" style="display:none; margin-top:16px;">
+      <div class="ticket-accent"></div>
+      <h3 class="ticket-title">Units Currently Off</h3>
+      <div class="ticket-sub">Not being checked — tap to turn one back on</div>
+      <div id="userOffUnitsList"></div>
     </div>
   </div>
 
@@ -1773,8 +1780,42 @@ function ucSelectableUnits(){
 function isUnitOff(u){ return u.runtime==='off'; }
 function unitGroupKey(u){ return (u.booth||'').trim() || (u.location||'').trim() || 'Ungrouped'; }
 function unitTicketCount(u){ return (u.maintenanceHistory||[]).length + (u.maintenanceTicket?1:0); }
+function renderUserOffUnits(){
+  const card = document.getElementById('userOffUnitsCard');
+  const list = document.getElementById('userOffUnitsList');
+  if(!card || !list) return;
+  const offUnits = myOffAssignedUnits();
+  if(offUnits.length===0){ card.style.display='none'; return; }
+  card.style.display='block';
+  list.innerHTML = offUnits
+    .sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b))||a.name.localeCompare(b.name))
+    .map(u=>{
+      const why = isUnitOff(u) ? 'Out of service' : `Marked off today${u.markedOffBy?' by '+escapeHtml(u.markedOffBy):''}`;
+      return `<div style="display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border);">
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:600; font-size:13.5px;">${escapeHtml(u.name)}</div>
+          <div style="font-family:var(--mono); font-size:11px; color:#888;">${escapeHtml(unitGroupKey(u))} · ${why}</div>
+        </div>
+        <button class="btn btn-primary btn-small" onclick="turnUnitBackOn('${u.id}')">Turn On</button>
+      </div>`;
+    }).join('');
+}
+async function turnUnitBackOn(unitId){
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  const wasRuntimeOff = isUnitOff(u);
+  if(!confirm(`Turn "${u.name}" back ON? It'll go back into the normal daily check rotation.`)) return;
+  const onAt = new Date().toISOString();
+  u.markedOffAt = null; u.markedOffBy = null;
+  if(wasRuntimeOff) u.runtime = 'seasonal';
+  if(!u.history) u.history=[];
+  u.history.push({ at:onAt, temp:null, fans:null, notes: wasRuntimeOff?'Turned back on (was out of service)':'Turned back on', photo:null, by:currentUser, entryType:'on' });
+  await persistUnits();
+  render(); renderFleetChart(); renderIncidents(); renderUserWorkerList();
+  toast(`${u.name} is back on.`);
+}
 function renderUserWorkerList(){
   if(!isUserRole()) return;
+  renderUserOffUnits();
   const pending = ucSelectableUnits();
   const boothSel = document.getElementById('uc_booth');
   const anyAssigned = units.some(u=>(u.assignedUserIds||[]).includes(currentUserId));
@@ -1816,7 +1857,8 @@ function updateUcTypeVisibility(){
   const type = document.getElementById('uc_type').value;
   document.getElementById('uc_tempFieldsWrap').style.display = type==='check' ? 'block' : 'none';
   document.getElementById('uc_performedByWrap').style.display = type==='repair' ? 'block' : 'none';
-  document.getElementById('uc_showAllWrap').style.display = type==='on' ? 'none' : 'flex';
+  const showAllWrap = document.getElementById('uc_showAllWrap');
+  if(showAllWrap) showAllWrap.style.display = type==='on' ? 'none' : 'flex';
 }
 // Changing the entry type changes which units are selectable (e.g. "Turn unit
 // back ON" needs to list off units, which are hidden from every other view).
