@@ -39,6 +39,7 @@
 -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -3573,7 +3574,20 @@ document.getElementById('masterReportOverlay').addEventListener('click', e=>{ if
 document.getElementById('historyOverlay').addEventListener('click', e=>{ if(e.target.id==='historyOverlay') closeHistoryModal(); });
 document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.target.id==='incidentsOverlay') closeIncidentsModal(); });
 
+async function ensureAnonAuth(){
+  try{
+    if(!firebase.auth().currentUser){
+      await firebase.auth().signInAnonymously();
+    }
+  }catch(err){
+    console.error('Anonymous sign-in failed:', err);
+    alert("Couldn't connect to the database. If this keeps happening, tell Scott — Anonymous sign-in may need to be enabled in Firebase.");
+    throw err;
+  }
+}
+
 (async function init(){
+  await ensureAnonAuth();
   await migrateOldDataIfNeeded();
   await loadSuperadmins();
   await loadStaffNotes();
