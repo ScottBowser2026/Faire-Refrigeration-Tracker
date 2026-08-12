@@ -333,7 +333,7 @@
       </div>
       <div id="uc_tempFieldsWrap">
         <div class="two-col">
-          <div class="field"><label>Temperature (°F)</label><input type="text" id="uc_temp" inputmode="text" placeholder="e.g. 38 or -5"></div>
+          <div class="field"><label>Temperature (°F)</label><select id="uc_temp"></select></div>
           <div class="field"><label>Fans operating?</label><select id="uc_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
         </div>
         <div class="field"><label>Compressor running?</label><select id="uc_compressor"><option value="true">Yes</option><option value="false">No — down</option></select></div>
@@ -592,7 +592,7 @@
       <div class="field">
         <label>Actual reading while here <span class="hint">(optional — entering this logs a real check and updates this unit's live status)</span></label>
         <div style="display:flex; gap:8px;">
-          <input type="text" id="ticket_entry_temp" inputmode="text" placeholder="Temp °F (e.g. -5)" style="flex:1;">
+          <select id="ticket_entry_temp" style="flex:1;"></select>
           <select id="ticket_entry_fans" style="flex:1;"><option value="">Fans?</option><option value="true">Fans OK</option><option value="false">Fans DOWN</option></select>
           <select id="ticket_entry_compressor" style="flex:1;"><option value="">Compressor?</option><option value="true">Compressor OK</option><option value="false">Compressor DOWN</option></select>
         </div>
@@ -757,7 +757,7 @@
     </div>
     <div id="tempFieldsWrap">
       <div class="two-col">
-        <div class="field"><label>Temperature (°F)</label><input type="text" id="c_temp" inputmode="text" placeholder="e.g. 38 or -5"></div>
+        <div class="field"><label>Temperature (°F)</label><select id="c_temp"></select></div>
         <div class="field"><label>Fans operating?</label><select id="c_fans"><option value="true">Yes</option><option value="false">No — down</option></select></div>
       </div>
       <div class="field"><label>Compressor running?</label><select id="c_compressor"><option value="true">Yes</option><option value="false">No — down</option></select></div>
@@ -1477,7 +1477,7 @@ function render(){
     return `<div class="card">
       <div class="card-top"><div><div class="card-name">${escapeHtml(unitGroupKey(u))}</div><div class="card-loc">${escapeHtml(u.name)}</div></div>
       <span class="status-badge ${badgeClass}">${badgeLabel}</span></div>
-      <div class="card-reading"><span><b>${u.currentTemp!=null?u.currentTemp+'°F':'—'}</b></span><span>fans ${u.fansOperating===true?'ok':u.fansOperating===false?'DOWN':'—'}</span><span>compressor ${u.compressorOperating===true?'ok':u.compressorOperating===false?'DOWN':'—'}</span></div>
+      <div class="card-reading"><span><b>${tempDisplay(u.currentTemp)}</b></span><span>fans ${u.fansOperating===true?'ok':u.fansOperating===false?'DOWN':'—'}</span><span>compressor ${u.compressorOperating===true?'ok':u.compressorOperating===false?'DOWN':'—'}</span></div>
       <div class="card-last">${u.serviceId?`Service ID: ${escapeHtml(u.serviceId)}`:'<span style="color:var(--flag);">Service ID not recorded yet</span>'}</div>
       ${compHtml}
       ${ticketBadgeHtml}
@@ -2667,6 +2667,36 @@ document.getElementById('clearUnitHistoryBtn').addEventListener('click', async (
 });
 
 
+
+// ---- Temperature pickers ----
+// Readings are chosen from a fixed list rather than typed, so a slipped digit
+// (e.g. "3740" instead of "37") can't be entered. Both out-of-range options are
+// well outside any cooler/freezer target, so either one flags the unit.
+const TEMP_LOW_SENTINEL = -99;   // stored value for "< -10"
+const TEMP_HIGH_SENTINEL = 99;   // stored value for "> 65"
+function tempOptionsHtml(placeholder){
+  let html = `<option value="">${placeholder||'Select temp °F'}</option>`;
+  html += `<option value="${TEMP_LOW_SENTINEL}">&lt; -10 °F</option>`;
+  for(let t=-10; t<=65; t++) html += `<option value="${t}">${t} °F</option>`;
+  html += `<option value="${TEMP_HIGH_SENTINEL}">&gt; 65 °F</option>`;
+  return html;
+}
+function tempDisplay(v){
+  if(v===null||v===undefined||v==='') return '—';
+  const n = parseFloat(v);
+  if(n===TEMP_LOW_SENTINEL) return '< -10°F';
+  if(n===TEMP_HIGH_SENTINEL) return '> 65°F';
+  return n+'°F';
+}
+function initTempPickers(){
+  const uc = document.getElementById('uc_temp');
+  if(uc && !uc.dataset.filled){ uc.innerHTML = tempOptionsHtml(); uc.dataset.filled='1'; }
+  const c = document.getElementById('c_temp');
+  if(c && !c.dataset.filled){ c.innerHTML = tempOptionsHtml(); c.dataset.filled='1'; }
+  const te = document.getElementById('ticket_entry_temp');
+  if(te && !te.dataset.filled){ te.innerHTML = tempOptionsHtml('Temp °F'); te.dataset.filled='1'; }
+}
+
 // ---- Barcode / Service Tag Scanner ----
 let scanInstance = null;
 let scanBusy = false;
@@ -2809,7 +2839,13 @@ function openCheckModal(unitId){
   const u = units.find(x=>x.id===unitId);
   document.getElementById('checkModalTitle').textContent = `Log Entry — ${u.name}`;
   document.getElementById('c_type').value='check';
-  document.getElementById('c_temp').value = u.currentTemp!=null?u.currentTemp:'';
+  const cTempSel = document.getElementById('c_temp');
+  cTempSel.value = u.currentTemp!=null ? String(u.currentTemp) : '';
+  if(u.currentTemp!=null && cTempSel.value===''){
+    // Stored value isn't one of the picker options (legacy typo or a decimal) —
+    // leave it unselected so a fresh, valid reading has to be chosen.
+    cTempSel.selectedIndex = 0;
+  }
   document.getElementById('c_fans').value = u.fansOperating===false?'false':'true';
   document.getElementById('c_compressor').value = u.compressorOperating===false?'false':'true';
   document.getElementById('c_notes').value=''; document.getElementById('c_photo').value='';
@@ -2972,7 +3008,7 @@ function renderHistoryBody(){
         const type=h.entryType||'check'; const badgeClass='entry-'+type;
         const outOfRange = type==='check' && (h.temp<u.tmin||h.temp>u.tmax);
         const bad = outOfRange || h.fans===false || h.compressor===false;
-        const readingHtml = type==='check' ? `<span style="color:${bad?'var(--flag)':'var(--ink)'}; font-weight:600;">${h.temp}°F</span>&nbsp;<span style="color:${h.fans===false?'var(--flag)':'#888'};">fans ${h.fans?'ok':'DOWN'}</span>&nbsp;<span style="color:${h.compressor===false?'var(--flag)':'#888'};">compressor ${h.compressor?'ok':'DOWN'}</span>` : '';
+        const readingHtml = type==='check' ? `<span style="color:${bad?'var(--flag)':'var(--ink)'}; font-weight:600;">${tempDisplay(h.temp)}</span>&nbsp;<span style="color:${h.fans===false?'var(--flag)':'#888'};">fans ${h.fans?'ok':'DOWN'}</span>&nbsp;<span style="color:${h.compressor===false?'var(--flag)':'#888'};">compressor ${h.compressor?'ok':'DOWN'}</span>` : '';
         const performedByHtml = (type==='repair' && h.performedBy) ? `<span class="entry-badge" style="background:var(--unset-bg); color:#555;">${escapeHtml(h.performedBy)}</span>&nbsp;` : '';
         return `<div style="display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--border);">
           <div style="flex:1; font-size:13.5px;">
@@ -3021,7 +3057,7 @@ async function emailNotCheckedReport(){
 }
 function complianceReasons(u){
   const reasons=[]; if(u.fansOperating===false) reasons.push('fans down'); if(u.compressorOperating===false) reasons.push('compressor down');
-  if(u.currentTemp!=null && (u.currentTemp<u.tmin||u.currentTemp>u.tmax)) reasons.push(`${u.currentTemp}°F (target ${u.tmin}-${u.tmax}°F)`);
+  if(u.currentTemp!=null && (u.currentTemp<u.tmin||u.currentTemp>u.tmax)) reasons.push(`${tempDisplay(u.currentTemp)} (target ${u.tmin}-${u.tmax}°F)`);
   return reasons;
 }
 function openMasterReportModal(){
@@ -3076,7 +3112,7 @@ function buildReportSnapshotForDate(dateKey){
       const reasons = [];
       if(last.fans===false) reasons.push('fans down');
       if(last.compressor===false) reasons.push('compressor down');
-      if(last.temp<u.tmin||last.temp>u.tmax) reasons.push(`${last.temp}°F (target ${u.tmin}-${u.tmax}°F)`);
+      if(last.temp<u.tmin||last.temp>u.tmax) reasons.push(`${tempDisplay(last.temp)} (target ${u.tmin}-${u.tmax}°F)`);
       flagged.push({ name:u.name, location:u.location||'', reasons: reasons.join(', ')||'flagged' });
     }
   });
@@ -3288,7 +3324,7 @@ function buildIncidents(){
         const reasonParts = [];
         if(h.fans===false) reasonParts.push('fans down');
         if(h.compressor===false) reasonParts.push('compressor down');
-        if(h.temp<u.tmin||h.temp>u.tmax) reasonParts.push(`${h.temp}°F (target ${u.tmin}-${u.tmax}°F)`);
+        if(h.temp<u.tmin||h.temp>u.tmax) reasonParts.push(`${tempDisplay(h.temp)} (target ${u.tmin}-${u.tmax}°F)`);
         // Note: no resolvedAt here anymore — an incident only resolves once an
         // Admin/Superadmin explicitly clears it (Clear Report or closing the
         // maintenance ticket). A later good reading alone no longer clears it,
@@ -3693,6 +3729,7 @@ async function ensureAnonAuth(){
 }
 
 (async function init(){
+  initTempPickers();
   await ensureAnonAuth();
   await migrateOldDataIfNeeded();
   await loadSuperadmins();
