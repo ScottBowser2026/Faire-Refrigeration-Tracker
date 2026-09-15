@@ -465,7 +465,10 @@
   <!-- COSTS TAB (F&B Manager/Superadmin as a tab; Accounting's dedicated view) -->
   <div id="costsTabView" style="display:none">
     <div class="section-head"><h2>Repair &amp; Service Costs</h2><span class="hint">All outside-service spending at this site</span></div>
-    <button class="btn btn-primary btn-small" id="addPriorRepairBtn" style="margin-bottom:14px;">Add Prior Repair</button>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+      <button class="btn btn-primary btn-small" id="addPriorRepairBtn">Add Prior Repair</button>
+      <button class="btn btn-outline btn-small" id="importCostsBtn">Import Costs from CSV</button>
+    </div>
     <div class="panel" id="costsTotalPanel" style="margin-bottom:14px;"></div>
     <div class="section-head"><h2>Repeat Repairs</h2><span class="hint">Units with 2+ maintenance tickets ever — possible candidates for replacement</span></div>
     <div id="repeatRepairsList" style="margin-bottom:20px;"></div>
@@ -726,6 +729,25 @@
 </div>
 
 <!-- ADD PRIOR REPAIR (backfill historical repairs, Accounting/F&B Manager/Superadmin) -->
+<div class="overlay" id="importCostsOverlay">
+  <div class="modal" style="max-width:520px;">
+    <h2>Import Costs from CSV</h2>
+    <div class="sub">Bulk-loads historical service invoices as closed repair records</div>
+    <div style="font-size:12.5px; color:#777; margin-bottom:10px;">
+      Each row becomes a backfilled prior-repair record on the matching unit, exactly like
+      Add Prior Repair does one at a time. Rows are matched to units by <b>Service ID</b> —
+      a unit's Service ID field must match the CSV's <code>service_id</code> column exactly.
+      Required columns: <code>service_id, invoice, date, amount, work_performed, vendor</code>.
+    </div>
+    <div class="field"><label>CSV file</label><input type="file" id="costs_csv_file" accept=".csv,text/csv"></div>
+    <div id="costsImportPreview" style="max-height:300px; overflow-y:auto; margin:10px 0; font-size:12.5px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeImportCostsModal()">Cancel</button>
+      <button class="btn btn-primary" id="costsImportConfirmBtn" style="display:none;" onclick="confirmCostsImport()">Import Matched Rows</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="priorRepairOverlay">
   <div class="modal" style="max-width:480px;">
     <h2>Add Prior Repair</h2>
@@ -2041,6 +2063,143 @@ async function savePriorRepair(){
   render(); renderCostsTab();
   toast(`Prior repair added to ${unitGroupKey(u)} — ${u.name}.`);
 }
+
+// ---- Bulk cost import ----
+// Loads historical vendor invoices in one pass. Each row is written as a closed,
+// backfilled maintenance ticket carrying one outsideServiceCall — the identical
+// shape savePriorRepair() produces, so the Costs tab totals it with no special-casing.
+// Matching is by Service ID because that's the vendor's own identifier for the unit.
+let pendingCostRows = null;
+
+// Quote-aware CSV parser: handles commas inside quoted fields and "" escapes.
+function parseCsvQuoted(text){
+  const rows=[]; let row=[], cell='', inQ=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){
+      if(ch==='"'){ if(text[i+1]==='"'){ cell+='"'; i++; } else inQ=false; }
+      else cell+=ch;
+    } else {
+      if(ch==='"') inQ=true;
+      else if(ch===','){ row.push(cell); cell=''; }
+      else if(ch==='\n'){ row.push(cell); rows.push(row); row=[]; cell=''; }
+      else if(ch==='\r'){ /* skip */ }
+      else cell+=ch;
+    }
+  }
+  if(cell.length || row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r=>r.some(c=>c && c.trim().length));
+}
+
+function openImportCostsModal(){
+  if(!isSiteAdmin() && !isAccounting()) return;
+  pendingCostRows = null;
+  document.getElementById('costs_csv_file').value = '';
+  document.getElementById('costsImportPreview').innerHTML = '';
+  document.getElementById('costsImportConfirmBtn').style.display = 'none';
+  document.getElementById('importCostsOverlay').classList.add('show');
+}
+function closeImportCostsModal(){ document.getElementById('importCostsOverlay').classList.remove('show'); }
+
+document.getElementById('costs_csv_file').addEventListener('change', async e=>{
+  const file = e.target.files[0];
+  const prev = document.getElementById('costsImportPreview');
+  const btn = document.getElementById('costsImportConfirmBtn');
+  if(!file){ prev.innerHTML=''; btn.style.display='none'; return; }
+  const text = await file.text();
+  const rows = parseCsvQuoted(text);
+  if(rows.length<2){ prev.innerHTML = `<span style="color:var(--flag);">That file has no data rows.</span>`; btn.style.display='none'; return; }
+
+  const header = rows[0].map(h=>h.trim().toLowerCase());
+  const col = name => header.indexOf(name);
+  const need = ['service_id','invoice','date','amount'];
+  const missing = need.filter(n=>col(n)===-1);
+  if(missing.length){
+    prev.innerHTML = `<span style="color:var(--flag);">Missing required column(s): ${missing.join(', ')}</span>`;
+    btn.style.display='none'; return;
+  }
+
+  // Index units by Service ID (case/space-insensitive)
+  const bySvc = {};
+  units.forEach(u=>{ if(u.serviceId) bySvc[String(u.serviceId).trim().toLowerCase()] = u; });
+
+  const matched = [], unmatched = [], dupes = [];
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    if(!r || r.every(c=>!c || !c.trim())) continue;
+    const sid = (r[col('service_id')]||'').trim();
+    if(!sid) continue;
+    const u = bySvc[sid.toLowerCase()];
+    const rec = {
+      serviceId: sid,
+      invoice: (r[col('invoice')]||'').trim(),
+      date: (r[col('date')]||'').trim(),
+      amount: (r[col('amount')]||'').trim(),
+      work: col('work_performed')>-1 ? (r[col('work_performed')]||'').trim() : '',
+      vendor: col('vendor')>-1 ? (r[col('vendor')]||'').trim() : '',
+      desc: col('unit_description')>-1 ? (r[col('unit_description')]||'').trim() : '',
+      unit: u || null
+    };
+    if(!u){ unmatched.push(rec); continue; }
+    // Skip anything already imported — same unit, same invoice ref — so a re-run
+    // doesn't double-count the spend.
+    const already = (u.maintenanceHistory||[]).some(t=>(t.outsideServiceCalls||[]).some(c=>c.invoiceRef && rec.invoice && c.invoiceRef===rec.invoice));
+    if(already){ dupes.push(rec); continue; }
+    matched.push(rec);
+  }
+
+  pendingCostRows = matched;
+  const money = matched.reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+  let html = `<div style="margin-bottom:8px;">
+    <b style="color:var(--ok);">${matched.length} row(s) ready</b> — $${money.toFixed(2)} total<br>
+    ${dupes.length?`<span style="color:#888;">${dupes.length} already imported (skipped)</span><br>`:''}
+    ${unmatched.length?`<b style="color:var(--flag);">${unmatched.length} row(s) have no matching unit</b>`:''}
+  </div>`;
+  if(unmatched.length){
+    const ids = [...new Set(unmatched.map(r=>r.serviceId))];
+    html += `<div style="border-top:1px solid var(--border); padding-top:6px; margin-bottom:6px;">
+      <div style="color:#888; margin-bottom:4px;">No unit has these Service IDs — fill them in on the unit, then re-import:</div>
+      ${ids.map(id=>{
+        const ex = unmatched.find(r=>r.serviceId===id);
+        return `<div style="font-family:var(--mono); font-size:11.5px;">${escapeHtml(id)}${ex.desc?` — ${escapeHtml(ex.desc)}`:''}</div>`;
+      }).join('')}
+    </div>`;
+  }
+  prev.innerHTML = html;
+  btn.style.display = matched.length ? 'inline-block' : 'none';
+});
+
+async function confirmCostsImport(){
+  if(!pendingCostRows || pendingCostRows.length===0) return;
+  const money = pendingCostRows.reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+  if(!confirm(`Import ${pendingCostRows.length} cost record(s) totalling $${money.toFixed(2)}?\n\nEach becomes a closed prior-repair record on its unit.`)) return;
+  pendingCostRows.forEach(r=>{
+    const u = r.unit;
+    const at = r.date ? new Date(r.date).toISOString() : new Date().toISOString();
+    if(!u.maintenanceHistory) u.maintenanceHistory = [];
+    u.maintenanceHistory.push({
+      openedBy: currentUser, openedAt: at,
+      reason: `Prior repair (imported): ${r.work || r.vendor || 'service call'}`,
+      entries: [],
+      outsideServiceCalls: [{
+        vendor: r.vendor || 'Outside service', cost: r.amount,
+        serviceDate: r.date, invoiceRef: r.invoice,
+        description: r.work, photo: null,
+        loggedBy: currentUser, at
+      }],
+      status:'closed', closedBy: currentUser, closedAt: at,
+      closeNotes:'Imported from cost CSV.'
+    });
+  });
+  await persistUnits();
+  closeImportCostsModal();
+  render(); renderCostsTab(); renderMaintenanceFrontPanel();
+  toast(`Imported ${pendingCostRows.length} cost record(s).`);
+  pendingCostRows = null;
+}
+document.getElementById('importCostsBtn').addEventListener('click', openImportCostsModal);
+document.getElementById('importCostsOverlay').addEventListener('click', e=>{ if(e.target.id==='importCostsOverlay') closeImportCostsModal(); });
+
 document.getElementById('addPriorRepairBtn').addEventListener('click', openPriorRepairModal);
 
 function renderCostsTab(){
