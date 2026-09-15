@@ -445,6 +445,7 @@
         first so nobody loses a check they're part-way through typing, and they stay logged in.
       </div>
       <button class="btn btn-primary btn-small" id="forceRefreshBtn">Refresh All Devices Now</button>
+      <div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:6px;">You're on <b id="frVersionHere"></b> — devices that reload will land on whatever is live now.</div>
       <div id="forceRefreshMeta" style="font-family:var(--mono); font-size:11px; color:#888; margin-top:6px;"></div>
     </div>
 
@@ -499,6 +500,7 @@
     <div class="grid" id="lancelotSummaryGrid"></div>
   </div>
 
+  <div id="appVersionFooter" style="text-align:center; padding:22px 0 10px; font-family:var(--mono); font-size:11px; color:#9aa29b;"></div>
 </main>
 
 <!-- LOGIN -->
@@ -2209,6 +2211,12 @@ function renderActivityTab(){
 }
 document.getElementById('activityRange').addEventListener('change', renderActivityTab);
 
+
+// ---- App version ----
+// Shown in the footer so anyone can say which build they're on — the usual
+// "did you get the update?" question is otherwise unanswerable from a screenshot.
+const APP_VERSION = "1.33";
+const APP_BUILD_DATE = "2026-09-15";
 
 // ---- Repair-vs-replace ----
 // A raw repair total says a unit is expensive; it doesn't say whether that's
@@ -4219,7 +4227,15 @@ async function ensureAnonAuth(){
 
 document.getElementById('forceRefreshBtn').addEventListener('click', pushForceRefresh);
 
+function renderAppVersion(){
+  const el = document.getElementById('appVersionFooter');
+  if(el) el.textContent = `Refrigeration Tracker · v${APP_VERSION} · built ${APP_BUILD_DATE}`;
+  const fr = document.getElementById('frVersionHere');
+  if(fr) fr.textContent = `v${APP_VERSION}`;
+}
+
 (async function init(){
+  renderAppVersion();
   initTempPickers();
   await ensureAnonAuth();
   watchForceRefresh();
