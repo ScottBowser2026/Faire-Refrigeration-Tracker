@@ -729,6 +729,19 @@
 </div>
 
 <!-- ADD PRIOR REPAIR (backfill historical repairs, Accounting/F&B Manager/Superadmin) -->
+<div class="overlay" id="unitCostOverlay">
+  <div class="modal" style="max-width:560px;">
+    <h2 id="unitCostTitle">Repair History</h2>
+    <div class="sub" id="unitCostSub"></div>
+    <div id="unitCostSummary" style="margin:12px 0;"></div>
+    <div id="unitCostBody" style="max-height:50vh; overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeUnitCostModal()">Close</button>
+      <button class="btn btn-outline" id="unitCostTicketBtn">Open Ticket</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="importCostsOverlay">
   <div class="modal" style="max-width:520px;">
     <h2>Import Costs from CSV</h2>
@@ -1493,6 +1506,13 @@ function render(){
     const ticketCount = unitTicketCount(u);
     const repeatRepairBadgeHtml = ticketCount>=2 ? `<div class="card-compliance bad">⚠️ Repeat repairs — ${ticketCount}x on record</div>` : '';
     const pmBtnHtml = isSiteAdmin() ? `<button class="btn btn-outline btn-small" onclick="openPmModal('${u.id}')">PM Tasks${duePmTasks.length>0?' ('+duePmTasks.length+')':''}</button>` : '';
+    // Lifetime outside-service spend for this unit — surfaced on the card so the
+    // cost story is visible where the unit is, not only on the Costs tab.
+    let unitSpend = 0;
+    if(u.maintenanceTicket) (u.maintenanceTicket.outsideServiceCalls||[]).forEach(c=>unitSpend+=parseFloat(c.cost)||0);
+    (u.maintenanceHistory||[]).forEach(t=>(t.outsideServiceCalls||[]).forEach(c=>unitSpend+=parseFloat(c.cost)||0));
+    const costBtnHtml = (isSiteAdmin()||isAccounting()) && unitSpend>0
+      ? `<button class="btn btn-outline btn-small" onclick="openUnitCostModal('${u.id}')" title="Repair cost history">$${unitSpend.toFixed(0)} repairs</button>` : '';
     const assignedIds = u.assignedUserIds||[];
     const assignedNames = u.assignedUserNames||[];
     let assignHtml;
@@ -1525,7 +1545,7 @@ function render(){
         <button class="btn btn-outline btn-small" onclick="openHistoryModal('${u.id}')">History</button>
         <button class="btn btn-outline btn-small" onclick="openEditModal('${u.id}')">Edit</button>
         ${ticketBtnHtml}
-        ${pmBtnHtml}
+        ${pmBtnHtml}${costBtnHtml}
       </div>
     </div>`;
   }).join('');
@@ -2064,6 +2084,75 @@ async function savePriorRepair(){
   toast(`Prior repair added to ${unitGroupKey(u)} — ${u.name}.`);
 }
 
+
+// ---- Per-unit repair cost drill-down ----
+// The Costs tab only showed a total per unit, which tells you something is expensive
+// but not why. This opens the actual line items behind that number.
+function allServiceCallsFor(u){
+  const calls = [];
+  if(u.maintenanceTicket) (u.maintenanceTicket.outsideServiceCalls||[]).forEach(c=>calls.push({c, open:true}));
+  (u.maintenanceHistory||[]).forEach(t=>(t.outsideServiceCalls||[]).forEach(c=>calls.push({c, open:false})));
+  // Newest first; fall back to logged-at when no service date was recorded.
+  return calls.sort((a,b)=> new Date(b.c.serviceDate||b.c.at||0) - new Date(a.c.serviceDate||a.c.at||0));
+}
+function openUnitCostModal(unitId){
+  const u = units.find(x=>x.id===unitId); if(!u) return;
+  const calls = allServiceCallsFor(u);
+  const total = calls.reduce((s,x)=>s+(parseFloat(x.c.cost)||0),0);
+
+  document.getElementById('unitCostTitle').textContent = `${unitGroupKey(u)} — ${u.name}`;
+  document.getElementById('unitCostSub').textContent = u.serviceId ? `Service ID: ${u.serviceId}` : 'No Service ID on file';
+
+  // Trailing-12-months vs everything older — a unit that cost a lot three years ago
+  // is a different story from one bleeding money right now.
+  const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear()-1);
+  let last12=0, older=0;
+  calls.forEach(x=>{
+    const amt = parseFloat(x.c.cost)||0;
+    const d = new Date(x.c.serviceDate||x.c.at||0);
+    if(d>=cutoff) last12+=amt; else older+=amt;
+  });
+  const vendors = [...new Set(calls.map(x=>x.c.vendor).filter(Boolean))];
+
+  document.getElementById('unitCostSummary').innerHTML = `
+    <div style="display:flex; gap:22px; flex-wrap:wrap; justify-content:center; text-align:center; padding:10px 0; border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+      <div><div style="font-size:24px; font-weight:700; color:var(--maint);">$${total.toFixed(2)}</div>
+        <div style="font-family:var(--mono); font-size:11px; color:#888;">all-time · ${calls.length} call${calls.length===1?'':'s'}</div></div>
+      <div><div style="font-size:24px; font-weight:700; color:${last12>older&&last12>0?'var(--flag)':'var(--ink)'};">$${last12.toFixed(2)}</div>
+        <div style="font-family:var(--mono); font-size:11px; color:#888;">last 12 months</div></div>
+      <div><div style="font-size:24px; font-weight:700;">${unitTicketCount(u)}</div>
+        <div style="font-family:var(--mono); font-size:11px; color:#888;">total tickets</div></div>
+    </div>
+    ${vendors.length?`<div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:6px;">Serviced by: ${vendors.map(escapeHtml).join(', ')}</div>`:''}`;
+
+  const body = document.getElementById('unitCostBody');
+  if(calls.length===0){
+    body.innerHTML = `<div style="color:#888; font-size:13.5px; padding:14px 0;">No service costs recorded for this unit yet.</div>`;
+  } else {
+    body.innerHTML = calls.map(({c,open})=>`
+      <div style="padding:10px 0; border-bottom:1px solid var(--border);">
+        <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:600; font-size:13.5px;">${escapeHtml(c.vendor||'Outside service')}${open?' <span class="role-pill role-maint" style="font-size:10px;">OPEN</span>':''}</div>
+            <div style="font-family:var(--mono); font-size:11px; color:#888;">
+              ${c.serviceDate?escapeHtml(c.serviceDate):fmtDate(c.at)}${c.invoiceRef?` · inv ${escapeHtml(c.invoiceRef)}`:''}
+            </div>
+            ${c.description?`<div style="font-size:12.5px; color:#555; margin-top:3px;">${escapeHtml(c.description)}</div>`:''}
+          </div>
+          <div style="font-weight:700; font-size:15px; color:var(--maint); white-space:nowrap;">$${(parseFloat(c.cost)||0).toFixed(2)}</div>
+        </div>
+        ${c.photo?`<img src="${c.photo}" onclick="openLightbox(this.src)" style="margin-top:6px; max-height:90px; border-radius:6px; cursor:pointer;">`:''}
+      </div>`).join('');
+  }
+
+  const tBtn = document.getElementById('unitCostTicketBtn');
+  tBtn.onclick = ()=>{ closeUnitCostModal(); openTicketModal(u.id); };
+  tBtn.textContent = u.maintenanceTicket ? 'Open Ticket' : 'Ticket History';
+  document.getElementById('unitCostOverlay').classList.add('show');
+}
+function closeUnitCostModal(){ document.getElementById('unitCostOverlay').classList.remove('show'); }
+document.getElementById('unitCostOverlay').addEventListener('click', e=>{ if(e.target.id==='unitCostOverlay') closeUnitCostModal(); });
+
 // ---- Bulk cost import ----
 // Loads historical vendor invoices in one pass. Each row is written as a closed,
 // backfilled maintenance ticket carrying one outsideServiceCall — the identical
@@ -2247,7 +2336,7 @@ function renderCostsTab(){
   if(unitRows.length===0){ byUnitList.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">No outside-service costs logged yet.</div>`; return; }
   byUnitList.innerHTML = unitRows.map(r=>{
     const hasOpenTicket = !!r.unit.maintenanceTicket;
-    return `<div class="panel" style="cursor:pointer; margin-bottom:8px;" onclick="openTicketModal('${r.unit.id}')">
+    return `<div class="panel" style="cursor:pointer; margin-bottom:8px;" onclick="openUnitCostModal('${r.unit.id}')">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
         <div>
           <div style="font-weight:700; font-size:15px;">${escapeHtml(unitGroupKey(r.unit))} <span style="font-weight:400; color:#888; font-size:13px;">— ${escapeHtml(r.unit.name)}</span></div>
