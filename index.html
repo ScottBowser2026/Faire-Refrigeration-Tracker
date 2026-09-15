@@ -246,6 +246,7 @@
     <button class="btn btn-outline" id="navAdminBtn" onclick="switchMainView('admin')">Admin Panel</button>
     <button class="btn btn-outline" id="navAllFairesBtn" style="display:none" onclick="switchMainView('allfaires')">All Faires</button>
     <button class="btn btn-outline" id="navCostsBtn" onclick="switchMainView('costs')">Costs</button>
+    <button class="btn btn-outline" id="navActivityBtn" onclick="switchMainView('activity')">Activity</button>
   </div>
 
   <div id="normalDashboardWrap">
@@ -474,6 +475,19 @@
     <div id="repeatRepairsList" style="margin-bottom:20px;"></div>
     <div class="section-head"><h2>By Unit</h2></div>
     <div id="costsByUnitList"></div>
+  </div>
+
+  <div id="activityTabView" style="display:none">
+    <div class="section-head"><h2>Activity by Person</h2><span class="hint">Who's logging checks and working tickets</span></div>
+    <div class="toolbar" style="margin-bottom:14px;">
+      <select id="activityRange">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="0">All time</option>
+      </select>
+    </div>
+    <div id="activityList"></div>
   </div>
 
   <!-- LANCELOT MANAGEMENT SUMMARY (read-only, cross-site — replaces everything else for this role) -->
@@ -2085,6 +2099,109 @@ async function savePriorRepair(){
 }
 
 
+
+// ---- Activity by Person ----
+// Reconstructed from what's already stored: every check, mark-off, ticket entry
+// and service call records who did it. Nothing new had to be tracked — this is
+// history that was always there, just never surfaced.
+function renderActivityTab(){
+  const wrap = document.getElementById('activityList');
+  if(!wrap) return;
+  if(!isSiteAdmin() && !isAccounting()) return;
+
+  const days = parseInt(document.getElementById('activityRange').value,10);
+  const cutoff = days>0 ? Date.now() - days*86400000 : 0;
+  const inRange = iso => { if(!iso) return false; const t=new Date(iso).getTime(); return !isNaN(t) && t>=cutoff; };
+
+  // name -> tallies. Keyed on the name string that was recorded at the time,
+  // so people who've since been removed still show their past work.
+  const tally = {};
+  const bump = (who, field, when, unitId) => {
+    if(!who) return;
+    const k = String(who).trim();
+    if(!k) return;
+    if(!tally[k]) tally[k] = { checks:0, recheck:0, offOn:0, ticketEntries:0, ticketsOpened:0, ticketsClosed:0, pmDone:0, serviceLogged:0, spend:0, units:new Set(), last:null };
+    tally[k][field]++;
+    if(unitId) tally[k].units.add(unitId);
+    if(when && (!tally[k].last || new Date(when) > new Date(tally[k].last))) tally[k].last = when;
+  };
+
+  units.forEach(u=>{
+    // Checks and off/on entries live in unit history
+    const seenDayByPerson = {};
+    (u.history||[]).forEach(h=>{
+      if(!inRange(h.at)) return;
+      const t = h.entryType || 'check';
+      if(t==='check'){
+        // Distinguish a day's first check from later re-temps of the same unit.
+        const key = `${h.by}|${u.id}|${localDateKeyFor(h.at)}`;
+        if(seenDayByPerson[key]) bump(h.by,'recheck',h.at,u.id);
+        else { seenDayByPerson[key]=true; bump(h.by,'checks',h.at,u.id); }
+      }
+      else if(t==='off'||t==='on') bump(h.by,'offOn',h.at,u.id);
+      else if(t==='maintenance' && /^PM:/.test(h.notes||'')) bump(h.by,'pmDone',h.at,u.id);
+      else bump(h.by,'ticketEntries',h.at,u.id);
+    });
+    // Tickets: open + closed + per-entry work + outside service calls
+    const allTickets = [];
+    if(u.maintenanceTicket) allTickets.push(u.maintenanceTicket);
+    (u.maintenanceHistory||[]).forEach(t=>allTickets.push(t));
+    allTickets.forEach(t=>{
+      if(inRange(t.openedAt)) bump(t.openedBy,'ticketsOpened',t.openedAt,u.id);
+      if(t.closedAt && inRange(t.closedAt)) bump(t.closedBy,'ticketsClosed',t.closedAt,u.id);
+      (t.entries||[]).forEach(e=>{ if(inRange(e.at)) bump(e.by,'ticketEntries',e.at,u.id); });
+      (t.outsideServiceCalls||[]).forEach(c=>{
+        if(!inRange(c.at)) return;
+        bump(c.loggedBy,'serviceLogged',c.at,u.id);
+        const k=String(c.loggedBy||'').trim();
+        if(tally[k]) tally[k].spend += parseFloat(c.cost)||0;
+      });
+    });
+  });
+
+  const rows = Object.entries(tally).map(([name,d])=>({ name, ...d, total: d.checks+d.recheck+d.offOn+d.ticketEntries+d.ticketsOpened+d.ticketsClosed+d.pmDone+d.serviceLogged }));
+  rows.sort((a,b)=>b.total-a.total);
+
+  // Anyone on the roster with zero activity in the window — often the more
+  // useful signal than who's busiest.
+  const activeNames = new Set(rows.map(r=>r.name.toLowerCase()));
+  const idle = (siteUsersCache[currentSite]||[]).filter(u=>!activeNames.has(fullName(u).toLowerCase()));
+
+  if(rows.length===0){
+    wrap.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">No activity recorded in this period.</div>`;
+    return;
+  }
+
+  const stat = (n,label,color) => n>0 ? `<div style="text-align:center;"><div style="font-size:18px; font-weight:700; color:${color||'var(--ink)'};">${n}</div><div style="font-family:var(--mono); font-size:10px; color:#888;">${label}</div></div>` : '';
+
+  wrap.innerHTML = rows.map(r=>`
+    <div class="panel" style="margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:140px;">
+          <div style="font-weight:700; font-size:15px;">${escapeHtml(r.name)}</div>
+          <div style="font-family:var(--mono); font-size:11px; color:#888;">
+            ${r.units.size} unit${r.units.size===1?'':'s'} touched${r.last?` · last active ${fmtDate(r.last)}`:''}
+          </div>
+        </div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
+          ${stat(r.checks,'checks','var(--ok)')}
+          ${stat(r.recheck,'re-temps')}
+          ${stat(r.offOn,'off/on')}
+          ${stat(r.pmDone,'PM done','var(--maint)')}
+          ${stat(r.ticketsOpened,'tickets opened','var(--flag)')}
+          ${stat(r.ticketEntries,'ticket notes')}
+          ${stat(r.ticketsClosed,'tickets closed','var(--ok)')}
+          ${r.spend>0?`<div style="text-align:center;"><div style="font-size:18px; font-weight:700; color:var(--maint);">$${r.spend.toFixed(0)}</div><div style="font-family:var(--mono); font-size:10px; color:#888;">costs logged</div></div>`:''}
+        </div>
+      </div>
+    </div>`).join('')
+    + (idle.length ? `<div class="panel" style="margin-top:12px; border-color:var(--border);">
+        <div style="font-weight:700; font-size:13px; margin-bottom:6px; color:#888;">No activity this period (${idle.length})</div>
+        <div style="font-size:13px;">${idle.map(u=>`${escapeHtml(fullName(u))} <span style="font-family:var(--mono); font-size:11px; color:#888;">(${roleLabel(u.role)})</span>`).join(' · ')}</div>
+      </div>` : '');
+}
+document.getElementById('activityRange').addEventListener('change', renderActivityTab);
+
 // ---- Per-unit repair cost drill-down ----
 // The Costs tab only showed a total per unit, which tells you something is expensive
 // but not why. This opens the actual line items behind that number.
@@ -2516,12 +2633,14 @@ function switchMainView(view){
   const isAdmin = view==='admin';
   const isAllFaires = view==='allfaires';
   const isCosts = view==='costs';
+  const isActivity = view==='activity';
 
   document.getElementById('normalDashboardWrap').style.display = isDash ? 'block' : 'none';
   document.getElementById('maintenanceTicketsOverviewWrap').style.display = isDash ? 'block' : 'none';
   document.getElementById('accessPanelWrap').style.display = isAdmin ? 'block' : 'none';
   document.getElementById('allFairesView').style.display = isAllFaires ? 'block' : 'none';
   document.getElementById('costsTabView').style.display = isCosts ? 'block' : 'none';
+  document.getElementById('activityTabView').style.display = isActivity ? 'block' : 'none';
 
   const setTab = (id, active) => {
     const el = document.getElementById(id);
@@ -2532,9 +2651,11 @@ function switchMainView(view){
   setTab('navAdminBtn', isAdmin);
   if(document.getElementById('navAllFairesBtn').style.display !== 'none') setTab('navAllFairesBtn', isAllFaires);
   setTab('navCostsBtn', isCosts);
+  setTab('navActivityBtn', isActivity);
 
   if(isAllFaires) renderAllSitesOverview();
   if(isCosts) renderCostsTab();
+  if(isActivity) renderActivityTab();
 }
 
 // ---- Site Users: CSV export, CSV import, and protected bulk-delete ----
