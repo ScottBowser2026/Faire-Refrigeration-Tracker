@@ -471,6 +471,9 @@
       <button class="btn btn-outline btn-small" id="importCostsBtn">Import Costs from CSV</button>
     </div>
     <div class="panel" id="costsTotalPanel" style="margin-bottom:14px;"></div>
+    <div class="section-head"><h2>Repair vs. Replace</h2><span class="hint">Units whose repair spend is approaching or past what a new one costs</span></div>
+    <div id="replaceCandidatesList" style="margin-bottom:20px;"></div>
+
     <div class="section-head"><h2>Repeat Repairs</h2><span class="hint">Units with 2+ maintenance tickets ever — possible candidates for replacement</span></div>
     <div id="repeatRepairsList" style="margin-bottom:20px;"></div>
     <div class="section-head"><h2>By Unit</h2></div>
@@ -546,6 +549,7 @@
     <div class="field"><label>Location <span class="hint">(more specific placement within the booth, optional)</span></label><input type="text" id="u_location"></div>
     <div class="field"><label>Stock / contents</label><input type="text" id="u_stock"></div>
     <div class="field"><label>Service ID <span class="hint">(tag/serial — e.g. "RB-014" for Rufus Brubaker-serviced units, or "PARF-014" by site)</span></label><input type="text" id="u_service_id" placeholder="Leave blank if not yet recorded"></div>
+    <div class="field"><label>Est. replacement cost <span class="hint">(what a new one would cost installed — powers the repair-vs-replace flag)</span></label><input type="text" id="u_replacement_cost" inputmode="decimal" placeholder="e.g. 8500 — leave blank if unknown"></div>
     <div class="field"><label>Barcode ID <span class="hint">(the value encoded on the physical scan tag — separate from Service ID)</span></label>
       <div style="display:flex; gap:6px;">
         <input type="text" id="u_barcode_id" placeholder="Scan or type the tag's value" style="flex:1;">
@@ -1519,6 +1523,9 @@ function render(){
     const pmBadgeHtml = duePmTasks.length>0 ? `<div class="card-compliance bad">🗓️ ${duePmTasks.length} PM task${duePmTasks.length===1?'':'s'} due</div>` : '';
     const ticketCount = unitTicketCount(u);
     const repeatRepairBadgeHtml = ticketCount>=2 ? `<div class="card-compliance bad">⚠️ Repeat repairs — ${ticketCount}x on record</div>` : '';
+    const rsCard = replaceStatus(u);
+    const replaceBadgeHtml = (rsCard.tier==='over' || rsCard.tier==='watch')
+      ? `<div class="card-compliance bad">${rsCard.tier==='over'?'💸':'📈'} ${escapeHtml(rsCard.label)}</div>` : '';
     const pmBtnHtml = isSiteAdmin() ? `<button class="btn btn-outline btn-small" onclick="openPmModal('${u.id}')">PM Tasks${duePmTasks.length>0?' ('+duePmTasks.length+')':''}</button>` : '';
     // Lifetime outside-service spend for this unit — surfaced on the card so the
     // cost story is visible where the unit is, not only on the Costs tab.
@@ -1551,7 +1558,7 @@ function render(){
       ${compHtml}
       ${ticketBadgeHtml}
       ${pmBadgeHtml}
-      ${repeatRepairBadgeHtml}
+      ${repeatRepairBadgeHtml}${replaceBadgeHtml}
       <div class="card-last">${neverChecked(u)?'Never checked':`Last: ${fmtDate(u.lastCheckAt)} · ${escapeHtml(u.lastCheckBy||'')}`}</div>
       ${assignHtml}
       <div class="card-actions">
@@ -2202,6 +2209,28 @@ function renderActivityTab(){
 }
 document.getElementById('activityRange').addEventListener('change', renderActivityTab);
 
+
+// ---- Repair-vs-replace ----
+// A raw repair total says a unit is expensive; it doesn't say whether that's
+// reasonable for the asset. Measured against replacement cost it becomes a
+// decision: the common rule of thumb is that once cumulative repairs pass ~50%
+// of replacement, you're buying the unit twice.
+function unitRepairSpend(u){
+  let s=0;
+  if(u.maintenanceTicket) (u.maintenanceTicket.outsideServiceCalls||[]).forEach(c=>s+=parseFloat(c.cost)||0);
+  (u.maintenanceHistory||[]).forEach(t=>(t.outsideServiceCalls||[]).forEach(c=>s+=parseFloat(c.cost)||0));
+  return s;
+}
+function replaceStatus(u){
+  const spend = unitRepairSpend(u);
+  const repl = parseFloat(u.replacementCost)||0;
+  if(repl<=0) return { spend, repl:0, pct:null, tier:'unknown', label:'', color:'#888' };
+  const pct = (spend/repl)*100;
+  if(pct>=100) return { spend, repl, pct, tier:'over', label:`Repairs have passed replacement cost (${Math.round(pct)}%)`, color:'var(--flag)' };
+  if(pct>=50)  return { spend, repl, pct, tier:'watch', label:`Repairs at ${Math.round(pct)}% of replacement`, color:'var(--maint)' };
+  return { spend, repl, pct, tier:'ok', label:`Repairs at ${Math.round(pct)}% of replacement`, color:'var(--ok)' };
+}
+
 // ---- Per-unit repair cost drill-down ----
 // The Costs tab only showed a total per unit, which tells you something is expensive
 // but not why. This opens the actual line items behind that number.
@@ -2239,7 +2268,15 @@ function openUnitCostModal(unitId){
         <div style="font-family:var(--mono); font-size:11px; color:#888;">last 12 months</div></div>
       <div><div style="font-size:24px; font-weight:700;">${unitTicketCount(u)}</div>
         <div style="font-family:var(--mono); font-size:11px; color:#888;">total tickets</div></div>
+      ${(()=>{ const rs=replaceStatus(u); return rs.pct===null ? '' :
+        `<div><div style="font-size:24px; font-weight:700; color:${rs.color};">${Math.round(rs.pct)}%</div>
+          <div style="font-family:var(--mono); font-size:11px; color:#888;">of $${rs.repl.toFixed(0)} replacement</div></div>`; })()}
     </div>
+    ${(()=>{ const rs=replaceStatus(u);
+       if(rs.tier==='unknown') return `<div style="font-size:12px; color:#888; margin-top:8px; text-align:center;">Add an estimated replacement cost on this unit to see repair-vs-replace.</div>`;
+       if(rs.tier==='over') return `<div style="margin-top:8px; padding:8px 10px; border-radius:8px; background:var(--flag-bg,#f5e2dd); color:var(--flag); font-size:13px; font-weight:600; text-align:center;">⚠️ ${rs.label} — replacement likely cheaper than continuing to repair.</div>`;
+       if(rs.tier==='watch') return `<div style="margin-top:8px; padding:8px 10px; border-radius:8px; background:#fdf4e7; color:var(--maint); font-size:13px; font-weight:600; text-align:center;">${rs.label} — worth pricing a replacement.</div>`;
+       return ''; })()}
     ${vendors.length?`<div style="font-family:var(--mono); font-size:11px; color:#888; margin-top:6px;">Serviced by: ${vendors.map(escapeHtml).join(', ')}</div>`:''}`;
 
   const body = document.getElementById('unitCostBody');
@@ -2430,6 +2467,30 @@ function renderCostsTab(){
             <div style="font-size:15px; font-weight:700; color:var(--flag);">⚠️ ${r.count}x</div>
           </div>
         </div>`).join('');
+  }
+
+  // Repair-vs-replace candidates: anything at 50%+ of replacement, worst first.
+  const replList = document.getElementById('replaceCandidatesList');
+  if(replList){
+    const cands = units.map(u=>({u, rs:replaceStatus(u)}))
+      .filter(x=>x.rs.pct!==null && x.rs.pct>=50)
+      .sort((a,b)=>b.rs.pct-a.rs.pct);
+    const noCostSet = units.filter(u=>!u.replacementCost && unitRepairSpend(u)>0).length;
+    replList.innerHTML = (cands.length===0
+      ? `<div class="panel" style="color:#888; font-size:13.5px;">No units have crossed 50% of replacement cost.</div>`
+      : cands.map(({u,rs})=>`<div class="panel" style="cursor:pointer; margin-bottom:8px; border-color:${rs.color};" onclick="openUnitCostModal('${u.id}')">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+            <div style="flex:1; min-width:150px;">
+              <div style="font-weight:700; font-size:15px;">${escapeHtml(unitGroupKey(u))} <span style="font-weight:400; color:#888; font-size:13px;">— ${escapeHtml(u.name)}</span></div>
+              <div style="font-size:12px; color:#888; margin-top:2px;">$${rs.spend.toFixed(0)} repaired vs $${rs.repl.toFixed(0)} to replace</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:19px; font-weight:700; color:${rs.color};">${Math.round(rs.pct)}%</div>
+              <div style="font-family:var(--mono); font-size:10.5px; color:${rs.color};">${rs.tier==='over'?'past replacement':'of replacement'}</div>
+            </div>
+          </div>
+        </div>`).join(''))
+      + (noCostSet>0 ? `<div class="panel" style="color:#888; font-size:12.5px; margin-top:8px;">${noCostSet} unit${noCostSet===1?' has':'s have'} repair spend but no replacement cost set — add one on the unit to include ${noCostSet===1?'it':'them'} here.</div>` : '');
   }
 
   let siteTotal = 0;
@@ -2961,7 +3022,7 @@ function openAddModal(){
   document.getElementById('unitModalTitle').textContent='Add Unit';
   document.getElementById('deleteUnitBtn').style.display='none';
   document.getElementById('unitDangerZone').style.display='none';
-  ['u_name','u_booth','u_location','u_stock','u_service_id','u_barcode_id','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
+  ['u_name','u_booth','u_location','u_stock','u_service_id','u_barcode_id','u_replacement_cost','u_tmin','u_tmax'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('u_type').value='cooler'; document.getElementById('u_runtime').value='always';
   populateAssignedUserSelect([]); populateBoothDatalist();
   document.getElementById('unitOverlay').classList.add('show');
@@ -2979,6 +3040,7 @@ function openEditModal(unitId){
   document.getElementById('u_location').value=u.location||'';
   document.getElementById('u_stock').value=u.stock||'';
   document.getElementById('u_service_id').value=u.serviceId||'';
+  document.getElementById('u_replacement_cost').value = u.replacementCost!=null ? u.replacementCost : '';
   document.getElementById('u_barcode_id').value=u.barcodeId||'';
   document.getElementById('u_tmin').value=u.tmin!=null?u.tmin:'';
   document.getElementById('u_tmax').value=u.tmax!=null?u.tmax:'';
@@ -3009,6 +3071,7 @@ async function saveUnit(){
   const data = { name, type:document.getElementById('u_type').value, runtime:document.getElementById('u_runtime').value,
     booth:document.getElementById('u_booth').value.trim(), location:document.getElementById('u_location').value.trim(), stock:document.getElementById('u_stock').value.trim(),
     serviceId:document.getElementById('u_service_id').value.trim()||null,
+    replacementCost: (()=>{ const v=parseFloat(String(document.getElementById('u_replacement_cost').value).replace(/[^0-9.\-]/g,'')); return isNaN(v)||v<=0 ? null : v; })(),
     barcodeId:newBarcodeId,
     tmin, tmax, assignedUserIds: assignedIds, assignedUserNames: assignedUsers.map(u=>fullName(u)) };
   let wasFlagged = false;
