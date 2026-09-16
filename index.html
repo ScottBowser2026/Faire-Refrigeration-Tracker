@@ -42,6 +42,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root{
@@ -951,6 +952,7 @@
     <div id="dailyReportBody" style="max-height:60vh; overflow-y:auto; margin:10px 0;"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeDailyReportModal()">Close</button>
+      <button class="btn btn-primary" id="downloadReportPdfBtn">Download PDF</button>
       <button class="btn btn-danger" id="restateReportBtn" style="display:none">Restate from History</button>
     </div>
   </div>
@@ -2322,7 +2324,7 @@ document.getElementById('activityRange').addEventListener('change', renderActivi
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.35";
+const APP_VERSION = "1.36";
 const APP_BUILD_DATE = "2026-09-15";
 
 
@@ -3978,11 +3980,119 @@ function openDailyReportModal(reportId){
     + `<div style="font-family:var(--mono); font-size:12px; color:#777; padding-top:6px;">${r.totalUnits} total units in the system at submission time.</div>`
     + readSection;
   document.getElementById('dailyReportOverlay').classList.add('show');
+  document.getElementById('downloadReportPdfBtn').onclick = ()=>downloadReportPdf(r.id);
   const restateBtn = document.getElementById('restateReportBtn');
   restateBtn.style.display = isSuperadmin() ? 'inline-block' : 'none';
   restateBtn.dataset.reportId = r.id;
   markReportRead(reportId);
 }
+
+// ---- Daily report PDF ----
+// Drawn with jsPDF rather than screenshotting the modal: the text stays
+// selectable/searchable, the file is a fraction of the size, and it paginates
+// properly when a site has a long not-checked list.
+function reportPdfDoc(r){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const M = 54;                       // margin
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  let y = M;
+
+  const checked = r.totalUnits - r.notCheckedCount;
+  const checkedPct = r.totalUnits ? Math.round((checked/r.totalUnits)*100) : 0;
+  const compliancePct = checked ? Math.round((r.compliantCount/checked)*100) : 0;
+
+  const newPageIfNeeded = (need)=>{
+    if(y + need > H - M){ doc.addPage(); y = M; return true; }
+    return false;
+  };
+
+  // Header
+  doc.setFillColor(42,51,48); doc.rect(0,0,W,86,'F');
+  doc.setTextColor(255,255,255);
+  doc.setFont('helvetica','bold'); doc.setFontSize(17);
+  doc.text('Refrigeration Daily Report', M, 38);
+  doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+  doc.setTextColor(200,212,205);
+  doc.text(`${SITES[r.site||currentSite]?SITES[r.site||currentSite].name:''}`, M, 57);
+  doc.text(`${r.date}`, W-M, 38, {align:'right'});
+  doc.text(r.auto ? 'Auto-generated 11:59 PM' : `Submitted by ${r.submittedBy}`, W-M, 57, {align:'right'});
+  y = 120;
+
+  // Headline numbers
+  const boxW = (W - M*2 - 16) / 2;
+  const drawStat = (x, val, label, good) => {
+    doc.setDrawColor(216,220,211); doc.setFillColor(248,249,246);
+    doc.roundedRect(x, y, boxW, 62, 6, 6, 'FD');
+    doc.setFont('helvetica','bold'); doc.setFontSize(23);
+    if(good) doc.setTextColor(60,110,70); else doc.setTextColor(164,64,47);
+    doc.text(val, x + boxW/2, y+30, {align:'center'});
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(110,110,110);
+    doc.text(label, x + boxW/2, y+48, {align:'center'});
+  };
+  drawStat(M, `${checkedPct}%`, `checked  (${checked} of ${r.totalUnits} units)`, checkedPct>=90);
+  drawStat(M+boxW+16, `${compliancePct}%`, `in compliance  (${r.compliantCount} of ${checked} checked)`, compliancePct>=90);
+  y += 86;
+
+  const section = (title, rows, color, lineFn) => {
+    if(!rows || rows.length===0) return;
+    newPageIfNeeded(60);
+    doc.setFont('helvetica','bold'); doc.setFontSize(11);
+    doc.setTextColor(color[0],color[1],color[2]);
+    doc.text(`${title} (${rows.length})`, M, y);
+    y += 6;
+    doc.setDrawColor(216,220,211); doc.line(M, y, W-M, y);
+    y += 14;
+    rows.forEach(item=>{
+      const detail = lineFn(item) || '';
+      const nameTxt = `${item.name}${item.location?`  (${item.location})`:''}`;
+      const detailLines = detail ? doc.splitTextToSize(detail, W-M*2-14) : [];
+      newPageIfNeeded(16 + detailLines.length*11);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.8); doc.setTextColor(35,40,37);
+      doc.text(nameTxt, M, y); y += 12;
+      if(detailLines.length){
+        doc.setFont('helvetica','normal'); doc.setFontSize(9);
+        doc.setTextColor(color[0],color[1],color[2]);
+        detailLines.forEach(l=>{ doc.text(l, M+12, y); y += 11; });
+      }
+      y += 4;
+    });
+    y += 10;
+  };
+
+  section('Flagged — out of compliance', r.flaggedUnits||[], [164,64,47], u=>u.reasons);
+  section('Not checked', r.notCheckedUnits||[], [130,130,130], u=>u.assignedTo?`Assigned to: ${u.assignedTo}`:'Unassigned');
+
+  newPageIfNeeded(40);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120,120,120);
+  doc.text(`${r.compliantCount} unit(s) compliant and checked · ${r.totalUnits} total units at submission.`, M, y);
+  y += 12;
+  if(r.restatedAt) { doc.text(`Restated by ${r.restatedBy} on ${fmtDate(r.restatedAt)}.`, M, y); y += 12; }
+
+  // Footer on every page
+  const pages = doc.internal.getNumberOfPages();
+  for(let p=1;p<=pages;p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(150,150,150);
+    doc.text(`Refrigeration Tracker v${APP_VERSION}  ·  generated ${new Date().toLocaleString()}`, M, H-28);
+    doc.text(`Page ${p} of ${pages}`, W-M, H-28, {align:'right'});
+  }
+  return doc;
+}
+function downloadReportPdf(reportId){
+  if(!window.jspdf){ toast('PDF library did not load — check your connection and refresh.'); return; }
+  const r = dailyReports.find(x=>x.id===reportId);
+  if(!r){ toast('Report not found.'); return; }
+  try{
+    const siteName = (SITES[r.site||currentSite]?SITES[r.site||currentSite].name:'site').replace(/[^a-z0-9]+/gi,'-');
+    reportPdfDoc(r).save(`Refrigeration-Report-${r.date}-${siteName}.pdf`);
+  }catch(err){
+    console.error(err);
+    toast("Couldn't build the PDF — see console for details.");
+  }
+}
+
 function closeDailyReportModal(){ document.getElementById('dailyReportOverlay').classList.remove('show'); }
 async function restateReport(){
   if(!isSuperadmin()) return;
