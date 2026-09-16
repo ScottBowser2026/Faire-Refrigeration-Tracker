@@ -155,3 +155,103 @@ exports.dailyReportCentral = onSchedule(
     await runGroup(SITE_TIMEZONES.central);
   }
 );
+
+// ============================================================================
+// Failure SMS alerts
+// ============================================================================
+// The app writes an alert record when a check puts a unit out of compliance;
+// this fires on that write and texts the F&B Managers listed on it. Twilio
+// credentials live in Firebase secrets, never in the client, which is the whole
+// reason this has to run server-side.
+//
+// It writes delivery status back onto the same record so the Alert Log in the
+// app shows what actually got delivered rather than what was merely attempted.
+// A text that silently fails is worse than no alerting, because you'd assume
+// someone was told.
+
+const { onValueCreated } = require("firebase-functions/v2/database");
+const { defineSecret } = require("firebase-functions/params");
+
+const TWILIO_ACCOUNT_SID = defineSecret("TWILIO_ACCOUNT_SID");
+const TWILIO_AUTH_TOKEN = defineSecret("TWILIO_AUTH_TOKEN");
+const TWILIO_FROM_NUMBER = defineSecret("TWILIO_FROM_NUMBER");
+
+// Twilio wants E.164 (+15555551212). Accept whatever people typed.
+function toE164(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/[^0-9]/g, "");
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
+  if (String(raw).trim().startsWith("+")) return String(raw).trim();
+  return null;
+}
+
+exports.sendFailureAlertSms = onValueCreated(
+  {
+    ref: "/refrigeration/sites/{siteKey}/alertLog/{alertId}",
+    secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER],
+  },
+  async (event) => {
+    const alert = event.data.val();
+    if (!alert) return;
+
+    // The app marks repeat failures on the same unit/day as suppressed, and
+    // records when nobody has a phone number. Nothing to send in either case.
+    if (alert.suppressed === true) return;
+    if (alert.smsStatus !== "pending") return;
+
+    const recipients = Array.isArray(alert.smsTo) ? alert.smsTo : [];
+    const ref = event.data.ref;
+
+    if (recipients.length === 0) {
+      await ref.update({ smsStatus: "no-phone-numbers" });
+      return;
+    }
+
+    const body =
+      `REFRIGERATION ALERT\n` +
+      `${alert.booth || ""} - ${alert.unitName || ""}\n` +
+      `${alert.reasons || "out of compliance"}\n` +
+      `Reading: ${alert.reading || "n/a"}\n` +
+      `Logged by ${alert.loggedBy || "unknown"}`;
+
+    let client;
+    try {
+      client = require("twilio")(TWILIO_ACCOUNT_SID.value(), TWILIO_AUTH_TOKEN.value());
+    } catch (err) {
+      console.error("Twilio init failed:", err);
+      await ref.update({ smsStatus: "failed", smsError: "Twilio credentials not configured" });
+      return;
+    }
+
+    const from = TWILIO_FROM_NUMBER.value();
+    let sent = 0;
+    const failures = [];
+
+    for (const r of recipients) {
+      const to = toE164(r.phone);
+      if (!to) {
+        failures.push(`${r.name}: unreadable number "${r.phone}"`);
+        continue;
+      }
+      try {
+        await client.messages.create({ body, from, to });
+        sent++;
+      } catch (err) {
+        console.error(`SMS to ${r.name} (${to}) failed:`, err && err.message);
+        failures.push(`${r.name}: ${(err && err.message) || "send failed"}`);
+      }
+    }
+
+    // Partial success still counts as sent — somebody was reached — but the
+    // failures are recorded so a consistently bad number gets noticed.
+    await ref.update({
+      smsStatus: sent > 0 ? "sent" : "failed",
+      smsSentCount: sent,
+      smsError: failures.length ? failures.join("; ") : null,
+      smsProcessedAt: new Date().toISOString(),
+    });
+
+    console.log(`[${alert.site}] Alert ${event.params.alertId}: ${sent}/${recipients.length} SMS sent.`);
+  }
+);
