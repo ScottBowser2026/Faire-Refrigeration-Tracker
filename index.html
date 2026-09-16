@@ -496,6 +496,12 @@
         <option value="0">All time</option>
       </select>
     </div>
+    <div id="coverageSummary"></div>
+
+    <div class="section-head"><h2>Unit Coverage</h2><span class="hint">Units checked least often — worst first</span></div>
+    <div id="unitCoverageList" style="margin-bottom:22px;"></div>
+
+    <div class="section-head"><h2>By Person</h2><span class="hint">Useful mainly for spotting who's stopped participating</span></div>
     <div id="activityList"></div>
   </div>
 
@@ -2124,12 +2130,101 @@ async function savePriorRepair(){
 // Reconstructed from what's already stored: every check, mark-off, ticket entry
 // and service call records who did it. Nothing new had to be tracked — this is
 // history that was always there, just never surfaced.
+
+// ---- Coverage ----
+// The unit is what matters, not who checked it: with several people sharing a
+// unit, per-person percentages punish someone whose colleague already covered it.
+// A unit-day counts as covered if ANYONE checked it that day.
+// Excluded from the denominator: units that are Off/out of service, and any day
+// a unit was marked off — nobody should be scored against equipment that was
+// deliberately shut down.
+function buildCoverage(days){
+  const dayKeys = [];
+  const today = new Date();
+  const span = days>0 ? days : 365;                   // "all time" capped at a year
+  for(let i=0;i<span;i++){
+    const d = new Date(today); d.setDate(d.getDate()-i);
+    dayKeys.push(localDateKeyFor(d.toISOString()));
+  }
+  const inService = units.filter(u=>!isUnitOff(u));
+
+  // Earliest recorded activity — don't count days before a unit existed.
+  const firstSeen = {};
+  inService.forEach(u=>{
+    const times = (u.history||[]).map(h=>h.at).filter(Boolean).sort();
+    firstSeen[u.id] = times.length ? localDateKeyFor(times[0]) : null;
+  });
+
+  const perUnit = inService.map(u=>{
+    const checkedDays = new Set();
+    const offDays = new Set();
+    (u.history||[]).forEach(h=>{
+      const k = localDateKeyFor(h.at);
+      const t = h.entryType || 'check';
+      if(t==='check') checkedDays.add(k);
+      else if(t==='off') offDays.add(k);
+    });
+    const start = firstSeen[u.id];
+    const eligible = dayKeys.filter(k => (!start || k>=start) && !offDays.has(k));
+    const covered = eligible.filter(k=>checkedDays.has(k));
+    const pct = eligible.length ? (covered.length/eligible.length)*100 : null;
+    const people = [...new Set((u.history||[]).filter(h=>(h.entryType||'check')==='check' && dayKeys.includes(localDateKeyFor(h.at))).map(h=>h.by).filter(Boolean))];
+    return { u, expected: eligible.length, covered: covered.length, pct, people };
+  }).filter(x=>x.expected>0);
+
+  const expectedTotal = perUnit.reduce((s,x)=>s+x.expected,0);
+  const coveredTotal  = perUnit.reduce((s,x)=>s+x.covered,0);
+  return {
+    perUnit,
+    expectedTotal, coveredTotal,
+    sitePct: expectedTotal ? (coveredTotal/expectedTotal)*100 : null,
+    dayCount: dayKeys.length,
+    unitCount: perUnit.length
+  };
+}
+function covColor(pct){ return pct>=90 ? 'var(--ok)' : pct>=50 ? 'var(--maint)' : 'var(--flag)'; }
+
+function renderCoverage(days){
+  const cov = buildCoverage(days);
+  const sum = document.getElementById('coverageSummary');
+  const list = document.getElementById('unitCoverageList');
+  if(!sum || !list) return;
+
+  if(cov.unitCount===0){
+    sum.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">No in-service units with activity in this period.</div>`;
+    list.innerHTML = '';
+    return;
+  }
+
+  const pct = cov.sitePct;
+  sum.innerHTML = `<div class="panel" style="margin-bottom:18px; text-align:center;">
+    <div style="font-size:38px; font-weight:700; color:${covColor(pct)}; line-height:1.1;">${Math.round(pct)}%</div>
+    <div style="font-size:13.5px; font-weight:600; margin-top:2px;">site coverage</div>
+    <div style="font-family:var(--mono); font-size:11.5px; color:#888; margin-top:4px;">
+      ${cov.coveredTotal} of ${cov.expectedTotal} unit-days checked · ${cov.unitCount} units · ${cov.dayCount} day${cov.dayCount===1?'':'s'}
+    </div>
+  </div>`;
+
+  const worst = cov.perUnit.slice().sort((a,b)=>a.pct-b.pct);
+  list.innerHTML = worst.map(x=>`
+    <div class="panel" style="margin-bottom:8px; border-left:4px solid ${covColor(x.pct)};">
+      <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+        <div style="flex:1; min-width:160px;">
+          <div style="font-weight:700; font-size:14.5px;">${escapeHtml(unitGroupKey(x.u))} <span style="font-weight:400; color:#888; font-size:13px;">— ${escapeHtml(x.u.name)}</span></div>
+          <div style="font-family:var(--mono); font-size:11px; color:#888;">checked ${x.covered} of ${x.expected} day${x.expected===1?'':'s'}${x.people.length?` · ${x.people.map(escapeHtml).join(', ')}`:' · nobody'}</div>
+        </div>
+        <div style="font-size:20px; font-weight:700; color:${covColor(x.pct)};">${Math.round(x.pct)}%</div>
+      </div>
+    </div>`).join('');
+}
+
 function renderActivityTab(){
   const wrap = document.getElementById('activityList');
   if(!wrap) return;
   if(!isSiteAdmin() && !isAccounting()) return;
 
   const days = parseInt(document.getElementById('activityRange').value,10);
+  renderCoverage(days);
   const cutoff = days>0 ? Date.now() - days*86400000 : 0;
   const inRange = iso => { if(!iso) return false; const t=new Date(iso).getTime(); return !isNaN(t) && t>=cutoff; };
 
@@ -2140,9 +2235,10 @@ function renderActivityTab(){
     if(!who) return;
     const k = String(who).trim();
     if(!k) return;
-    if(!tally[k]) tally[k] = { checks:0, recheck:0, offOn:0, ticketEntries:0, ticketsOpened:0, ticketsClosed:0, pmDone:0, serviceLogged:0, spend:0, units:new Set(), last:null };
+    if(!tally[k]) tally[k] = { checks:0, recheck:0, offOn:0, ticketEntries:0, ticketsOpened:0, ticketsClosed:0, pmDone:0, serviceLogged:0, spend:0, units:new Set(), activeDays:new Set(), last:null };
     tally[k][field]++;
     if(unitId) tally[k].units.add(unitId);
+    if(when) tally[k].activeDays.add(localDateKeyFor(when));
     if(when && (!tally[k].last || new Date(when) > new Date(tally[k].last))) tally[k].last = when;
   };
 
@@ -2200,7 +2296,7 @@ function renderActivityTab(){
         <div style="flex:1; min-width:140px;">
           <div style="font-weight:700; font-size:15px;">${escapeHtml(r.name)}</div>
           <div style="font-family:var(--mono); font-size:11px; color:#888;">
-            ${r.units.size} unit${r.units.size===1?'':'s'} touched${r.last?` · last active ${fmtDate(r.last)}`:''}
+            ${r.units.size} unit${r.units.size===1?'':'s'} touched · active ${r.activeDays.size} of ${days>0?days:r.activeDays.size} day${(days>0?days:r.activeDays.size)===1?'':'s'}${r.last?` · last ${fmtDate(r.last)}`:''}
           </div>
         </div>
         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
@@ -2226,7 +2322,7 @@ document.getElementById('activityRange').addEventListener('change', renderActivi
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.34";
+const APP_VERSION = "1.35";
 const APP_BUILD_DATE = "2026-09-15";
 
 
