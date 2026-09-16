@@ -1,13 +1,14 @@
 {
   "name": "refrigeration-tracker-functions",
-  "description": "Scheduled Cloud Functions for the Refrigeration Tracker (guaranteed 11:59 PM daily report)",
+  "description": "Cloud Functions for the Refrigeration Tracker (daily report + failure SMS alerts)",
   "engines": {
     "node": "20"
   },
   "main": "index.js",
   "dependencies": {
     "firebase-admin": "^12.1.0",
-    "firebase-functions": "^5.0.0"
+    "firebase-functions": "^5.0.0",
+    "twilio": "^5.0.0"
   },
   "private": true
 }
