@@ -1,0 +1,212 @@
+diff --git a/index.html b/index.html
+index b1e3e75..40a14a6 100644
+--- a/index.html
++++ b/index.html
+@@ -470,6 +470,10 @@
+       <button class="btn btn-outline btn-small" id="importCostsBtn">Import Costs from CSV</button>
+     </div>
+     <div class="panel" id="costsTotalPanel" style="margin-bottom:14px;"></div>
++
++    <div class="section-head"><h2>Unmapped Service IDs</h2><span class="hint">Cost-import rows whose Service ID didn't match a unit — associate each to the right one</span></div>
++    <div id="unmappedCostsList" style="margin-bottom:20px;"></div>
++
+     <div class="section-head"><h2>Repair vs. Replace</h2><span class="hint">Units whose repair spend is approaching or past what a new one costs</span></div>
+     <div id="replaceCandidatesList" style="margin-bottom:20px;"></div>
+ 
+@@ -1023,6 +1027,9 @@ let fleetChart = null;
+ let unitsListenerRef = null;
+ let recipientsListenerRef = null;
+ let usersListenerRef = null;
++let pendingCostMatches = [];        // cost-import rows whose Service ID didn't match any unit — live at Costs > Unmapped Service IDs
++let pendingCostMatchesListenerRef = null;
++let unmappedCostGroups = [];        // computed each render of the Unmapped Service IDs panel; index-addressed by the Associate/Dismiss buttons
+ 
+ function uid(){ return 'u_' + Math.random().toString(36).slice(2,10); }
+ function fullName(p){ return `${p.firstName||''} ${p.lastName||''}`.trim() || p.name || '(no name)'; }
+@@ -1214,6 +1221,7 @@ async function loadSiteData(siteKey){
+   if(recipientsListenerRef) recipientsListenerRef.off();
+   if(usersListenerRef) usersListenerRef.off();
+   if(dailyReportsListenerRef) dailyReportsListenerRef.off();
++  if(pendingCostMatchesListenerRef) pendingCostMatchesListenerRef.off();
+ 
+   const unitsSnap = await siteRef('units', siteKey).once('value');
+   units = objToArray(unitsSnap.val());
+@@ -1238,12 +1246,17 @@ async function loadSiteData(siteKey){
+   const drSnap = await siteRef('dailyReports', siteKey).once('value');
+   dailyReports = drSnap.exists() ? objToArray(drSnap.val()) : [];
+ 
++  const pcmSnap = await siteRef('pendingCostMatches', siteKey).once('value');
++  pendingCostMatches = pcmSnap.exists() ? objToArray(pcmSnap.val()) : [];
++
+   unitsListenerRef = siteRef('units', siteKey);
+   unitsListenerRef.on('value', snap=>{ units = objToArray(snap.val()); units.forEach(u=>{ if(!u.history) u.history=[]; if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; } else if(!u.assignedUserIds){ u.assignedUserIds=[]; u.assignedUserNames=[]; } migrateUnitType(u); if(u.maintenanceTicket){ if(!u.maintenanceTicket.entries) u.maintenanceTicket.entries=[]; if(!u.maintenanceTicket.outsideServiceCalls) u.maintenanceTicket.outsideServiceCalls=[]; } }); render(); renderFleetChart(); renderIncidents(); renderUserWorkerList(); renderUnitAssignments(); });
+   recipientsListenerRef = siteRef('notifyRecipients', siteKey);
+   recipientsListenerRef.on('value', snap=>{ recipients = snap.exists()?objToArray(snap.val()):[]; renderRecipientList(); });
+   dailyReportsListenerRef = siteRef('dailyReports', siteKey);
+   dailyReportsListenerRef.on('value', snap=>{ dailyReports = snap.exists()?objToArray(snap.val()):[]; renderDailyReportsList(); });
++  pendingCostMatchesListenerRef = siteRef('pendingCostMatches', siteKey);
++  pendingCostMatchesListenerRef.on('value', snap=>{ pendingCostMatches = snap.exists()?objToArray(snap.val()):[]; renderCostsTab(); });
+   if(alertLogListenerRef) alertLogListenerRef.off();
+   alertLogListenerRef = siteRef('alertLog', siteKey);
+   alertLogListenerRef.on('value', snap=>{ alertLog = snap.exists()?objToArray(snap.val()):[]; renderAlertLog(); });
+@@ -1254,6 +1267,7 @@ async function persistUnits(){ await siteRef('units').set(arrayToObj(units)); }
+ async function persistSiteUsers(){ await siteRef('users').set(arrayToObj(siteUsersCache[currentSite]||[])); }
+ async function persistRecipients(){ await siteRef('notifyRecipients').set(arrayToObj(recipients)); }
+ async function persistDailyReports(){ await siteRef('dailyReports').set(arrayToObj(dailyReports)); }
++async function persistPendingCostMatches(){ await siteRef('pendingCostMatches').set(arrayToObj(pendingCostMatches)); }
+ async function persistSuperadmins(){ await refSuperadmins.set(arrayToObj(superadmins)); }
+ 
+ function isMarkedOffToday(u){ return u.markedOffAt && localDateKeyFor(u.markedOffAt)===localDateKey(); }
+@@ -2744,6 +2758,26 @@ document.getElementById('costs_csv_file').addEventListener('change', async e=>{
+ 
+   pendingCostRows = matched;
+   const money = matched.reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
++
++  // Rows with no matching unit don't just vanish if nobody clicks Confirm (and the
++  // Confirm button is hidden entirely when nothing matched) — persist them to
++  // Costs > Unmapped Service IDs so an admin can associate them to a unit later,
++  // whenever they get around to it. Dedup by Service ID + invoice so re-importing
++  // the same file (or overlapping date ranges) doesn't pile up duplicates.
++  let newlyQueued = 0;
++  if(unmatched.length){
++    const existingKeys = new Set(pendingCostMatches.map(p=>`${(p.serviceId||'').trim().toLowerCase()}|${p.invoice||''}`));
++    const additions = unmatched
++      .filter(r=>!existingKeys.has(`${r.serviceId.trim().toLowerCase()}|${r.invoice||''}`))
++      .map(r=>({ serviceId:r.serviceId, invoice:r.invoice, date:r.date, amount:r.amount, work:r.work, vendor:r.vendor, desc:r.desc,
++                  id: uid(), queuedAt: new Date().toISOString(), queuedBy: currentUser }));
++    if(additions.length){
++      pendingCostMatches = pendingCostMatches.concat(additions);
++      newlyQueued = additions.length;
++      persistPendingCostMatches();
++    }
++  }
++
+   let html = `<div style="margin-bottom:8px;">
+     <b style="color:var(--ok);">${matched.length} row(s) ready</b> — $${money.toFixed(2)} total<br>
+     ${dupes.length?`<span style="color:#888;">${dupes.length} already imported (skipped)</span><br>`:''}
+@@ -2752,7 +2786,7 @@ document.getElementById('costs_csv_file').addEventListener('change', async e=>{
+   if(unmatched.length){
+     const ids = [...new Set(unmatched.map(r=>r.serviceId))];
+     html += `<div style="border-top:1px solid var(--border); padding-top:6px; margin-bottom:6px;">
+-      <div style="color:#888; margin-bottom:4px;">No unit has these Service IDs — fill them in on the unit, then re-import:</div>
++      <div style="color:#888; margin-bottom:4px;">No unit has these Service IDs${newlyQueued?` — ${newlyQueued} sent to Costs &gt; Unmapped Service IDs for an admin to associate`:' — already queued under Costs > Unmapped Service IDs'}:</div>
+       ${ids.map(id=>{
+         const ex = unmatched.find(r=>r.serviceId===id);
+         return `<div style="font-family:var(--mono); font-size:11.5px;">${escapeHtml(id)}${ex.desc?` — ${escapeHtml(ex.desc)}`:''}</div>`;
+@@ -2792,6 +2826,107 @@ async function confirmCostsImport(){
+   pendingCostRows = null;
+ }
+ document.getElementById('importCostsBtn').addEventListener('click', openImportCostsModal);
++
++// ---- Unmapped Service IDs (Costs tab) — cost-import rows that didn't match any unit,
++// queued in previewCsvImport's file handler above, waiting for an admin to pick the
++// right unit. Grouped by Service ID since one vendor invoice often has several line
++// items under the same ID.
++function renderUnmappedCostsPanel(){
++  const wrap = document.getElementById('unmappedCostsList');
++  if(!wrap) return;
++  if(!isSiteAdmin() && !isAccounting()) return;
++
++  const bySvc = {};
++  (pendingCostMatches||[]).forEach(r=>{
++    const key = (r.serviceId||'').trim();
++    if(!key) return;
++    (bySvc[key] = bySvc[key] || []).push(r);
++  });
++  unmappedCostGroups = Object.keys(bySvc).sort().map(serviceId=>{
++    const rows = bySvc[serviceId];
++    return { serviceId, rows, total: rows.reduce((s,r)=>s+(parseFloat(r.amount)||0),0) };
++  });
++
++  if(unmappedCostGroups.length===0){
++    wrap.innerHTML = `<div class="panel" style="color:#888; font-size:13.5px;">Nothing unmapped right now — every imported cost row has matched a unit.</div>`;
++    return;
++  }
++
++  const unitOptions = units.slice()
++    .sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b))||a.name.localeCompare(b.name))
++    .map(u=>`<option value="${u.id}">${escapeHtml(unitGroupKey(u))} — ${escapeHtml(u.name)}${u.serviceId?` (has ID: ${escapeHtml(u.serviceId)})`:''}</option>`).join('');
++
++  wrap.innerHTML = unmappedCostGroups.map((g,i)=>{
++    const descs = [...new Set(g.rows.map(r=>r.desc||r.work).filter(Boolean))];
++    return `<div class="panel" style="margin-bottom:10px;">
++      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
++        <div>
++          <div style="font-weight:700; font-family:var(--mono); font-size:14.5px;">${escapeHtml(g.serviceId)}</div>
++          ${descs.length?`<div style="font-size:12.5px; color:#888; margin-top:2px;">${escapeHtml(descs.join(' · '))}</div>`:''}
++          <div style="font-size:12px; color:#888; margin-top:2px;">${g.rows.length} line item${g.rows.length===1?'':'s'}</div>
++        </div>
++        <div style="font-size:16px; font-weight:700; color:var(--maint);">$${g.total.toFixed(2)}</div>
++      </div>
++      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
++        <select id="unmap_unit_${i}" style="flex:1; min-width:220px;">
++          <option value="">Select a unit to associate…</option>
++          ${unitOptions}
++        </select>
++        <button class="btn btn-primary btn-small" onclick="associateUnmappedCost(${i})">Associate</button>
++        <button class="btn btn-outline btn-small" onclick="dismissUnmappedCost(${i})">Not ours / dismiss</button>
++      </div>
++    </div>`;
++  }).join('');
++}
++
++async function associateUnmappedCost(i){
++  const g = unmappedCostGroups[i]; if(!g) return;
++  const sel = document.getElementById(`unmap_unit_${i}`);
++  const unitId = sel && sel.value;
++  if(!unitId){ toast('Pick a unit first.'); return; }
++  const u = units.find(x=>x.id===unitId); if(!u) return;
++
++  if(u.serviceId && u.serviceId.trim().toLowerCase()!==g.serviceId.trim().toLowerCase()){
++    if(!confirm(`${u.name} already has Service ID "${u.serviceId}" on file. Replace it with "${g.serviceId}"?`)) return;
++  } else if(!confirm(`Associate Service ID "${g.serviceId}" (${g.rows.length} record(s), $${g.total.toFixed(2)}) with ${unitGroupKey(u)} — ${u.name}?`)){
++    return;
++  }
++
++  u.serviceId = g.serviceId;
++  if(!u.maintenanceHistory) u.maintenanceHistory = [];
++  g.rows.forEach(r=>{
++    const at = r.date ? new Date(r.date).toISOString() : new Date().toISOString();
++    u.maintenanceHistory.push({
++      openedBy: currentUser, openedAt: at,
++      reason: `Prior repair (imported): ${r.work || r.vendor || 'service call'}`,
++      entries: [],
++      outsideServiceCalls: [{
++        vendor: r.vendor || 'Outside service', cost: r.amount,
++        serviceDate: r.date, invoiceRef: r.invoice,
++        description: r.work, photo: null,
++        loggedBy: currentUser, at
++      }],
++      status:'closed', closedBy: currentUser, closedAt: at,
++      closeNotes:'Imported from cost CSV (matched from Unmapped Service IDs).'
++    });
++  });
++  await persistUnits();
++
++  pendingCostMatches = pendingCostMatches.filter(r=>!g.rows.includes(r));
++  await persistPendingCostMatches();
++
++  render(); renderCostsTab(); renderMaintenanceFrontPanel();
++  toast(`Associated ${g.rows.length} record(s) to ${u.name}.`);
++}
++
++async function dismissUnmappedCost(i){
++  const g = unmappedCostGroups[i]; if(!g) return;
++  if(!confirm(`Dismiss Service ID "${g.serviceId}" (${g.rows.length} record(s))? This removes it from the unmapped list without adding it to any unit — use this if it's not equipment this tracker covers.`)) return;
++  pendingCostMatches = pendingCostMatches.filter(r=>!g.rows.includes(r));
++  await persistPendingCostMatches();
++  renderCostsTab();
++  toast('Dismissed.');
++}
+ document.getElementById('importCostsOverlay').addEventListener('click', e=>{ if(e.target.id==='importCostsOverlay') closeImportCostsModal(); });
+ 
+ document.getElementById('addPriorRepairBtn').addEventListener('click', openPriorRepairModal);
+@@ -2803,6 +2938,8 @@ function renderCostsTab(){
+   if(!totalPanel || !byUnitList) return;
+   if(!isSiteAdmin() && !isAccounting()) return;
+ 
++  renderUnmappedCostsPanel();
++
+   // Repeat repairs — computed independently of cost data, since a unit can rack up repeat
+   // tickets even if repairs were done in-house with no outside-service cost logged.
+   const repeatUnits = units.map(u=>({ unit:u, count:unitTicketCount(u) })).filter(r=>r.count>=2).sort((a,b)=>b.count-a.count);
