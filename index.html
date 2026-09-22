@@ -294,6 +294,9 @@
     <button class="btn btn-primary" id="addBtn" style="display:none">Add unit</button>
     <button class="btn btn-outline" id="importCsvBtn" style="display:none">Import from CSV</button>
     <button class="btn btn-outline" id="downloadCsvTemplateBtn" style="display:none">Download Template</button>
+    <button class="btn btn-outline" id="exportUnitsCsvBtn" style="display:none">Export Units CSV</button>
+    <button class="btn btn-outline" id="importReplacementCostBtn" style="display:none">Import Replacement Costs</button>
+    <input type="file" id="replacement_cost_csv_file" accept=".csv,text/csv" style="display:none">
   </div>
 
   <div class="grid" id="unitGrid"></div>
@@ -1332,6 +1335,8 @@ function renderRoleControls(){
     document.getElementById('addBtn').style.display = isSiteAdmin() ? 'inline-block' : 'inline-block';
     document.getElementById('importCsvBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('downloadCsvTemplateBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
+    document.getElementById('exportUnitsCsvBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
+    document.getElementById('importReplacementCostBtn').style.display = isSiteAdmin() ? 'inline-block' : 'none';
     document.getElementById('superadminPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('lancelotMgmtPanel').style.display = isSuperadmin() ? 'block' : 'none';
     document.getElementById('dangerZonePanel').style.display = isSuperadmin() ? 'block' : 'none';
@@ -2541,7 +2546,7 @@ function downloadActivityPdf(){
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.39";
+const APP_VERSION = "1.40";
 const APP_BUILD_DATE = "2026-09-22";
 
 
@@ -3566,6 +3571,65 @@ document.getElementById('csv_file')?.addEventListener('change', (e)=>{
   const reader = new FileReader();
   reader.onload = ()=>{ document.getElementById('csv_text').value = reader.result; };
   reader.readAsText(file);
+});
+
+// ---- Export all units / bulk-import replacement cost ----
+// Round-trip pattern: export every unit (with its internal id) to CSV, let someone
+// fill in replacement_cost in a spreadsheet, then re-import matching rows back to
+// units by that same id — safer than matching on name, which can collide or drift.
+document.getElementById('exportUnitsCsvBtn')?.addEventListener('click', ()=>{
+  const header = ['id','name','location','booth','type','service_id','replacement_cost','barcode_id','stock'];
+  const esc = v => { const s = (v==null?'':String(v)); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const lines = [header.join(',')];
+  units.slice()
+    .sort((a,b)=>unitGroupKey(a).localeCompare(unitGroupKey(b))||a.name.localeCompare(b.name))
+    .forEach(u=>{
+      lines.push([u.id, u.name, u.location||'', u.booth||'', u.type||'', u.serviceId||'',
+        u.replacementCost!=null?u.replacementCost:'', u.barcodeId||'', u.stock||''].map(esc).join(','));
+    });
+  const blob = new Blob([lines.join('\n')], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${currentSite}-units-export-${localDateKey()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${units.length} unit(s). Fill in replacement_cost and re-import with "Import Replacement Costs" — don't touch the id column.`);
+});
+document.getElementById('importReplacementCostBtn')?.addEventListener('click', ()=>{
+  document.getElementById('replacement_cost_csv_file').value = '';
+  document.getElementById('replacement_cost_csv_file').click();
+});
+document.getElementById('replacement_cost_csv_file')?.addEventListener('change', async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  const text = await file.text();
+  const rows = parseCsvQuoted(text);
+  if(rows.length<2){ toast('That file has no data rows.'); e.target.value=''; return; }
+  const header = rows[0].map(h=>h.trim().toLowerCase());
+  const idCol = header.indexOf('id');
+  const costCol = header.indexOf('replacement_cost');
+  if(idCol===-1 || costCol===-1){
+    toast('CSV needs "id" and "replacement_cost" columns — use Export Units CSV to get the right format, then edit that file.');
+    e.target.value=''; return;
+  }
+  let updated=0, unmatched=0, skipped=0;
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i]; if(!r || r.every(c=>!c||!c.trim())) continue;
+    const id = (r[idCol]||'').trim();
+    const raw = (r[costCol]||'').trim();
+    if(!id) continue;
+    const u = units.find(x=>x.id===id);
+    if(!u){ unmatched++; continue; }
+    if(raw===''){ skipped++; continue; }
+    const val = parseFloat(raw.replace(/[^0-9.\-]/g,''));
+    if(isNaN(val) || val<=0){ skipped++; continue; }
+    u.replacementCost = val;
+    updated++;
+  }
+  if(updated>0){ await persistUnits(); render(); renderCostsTab(); }
+  toast(`Updated replacement cost on ${updated} unit(s).`
+    + (unmatched?` ${unmatched} row(s) didn't match any unit (id changed or wrong file?).`:'')
+    + (skipped?` ${skipped} row(s) had no usable value and were left as-is.`:''));
+  e.target.value = '';
 });
 
 function openAddModal(){
