@@ -1002,6 +1002,7 @@ const refSuperadmins = db.ref('refrigeration/superadmins');
 const refLancelotMgmt = db.ref('refrigeration/lancelotManagement');
 const refStaffNotes = db.ref('refrigeration/staffNotes'); // global — same notes show for every site
 const refForceRefresh = db.ref('refrigeration/forceRefreshAt'); // global — Superadmin-triggered reload signal
+const refAppVersionInfo = db.ref('refrigeration/appVersionInfo'); // global — latest known deployed version, for the stale-tab banner
 
 // ===================== EMAILJS CONFIG (same as before) =====================
 const EMAILJS_PUBLIC_KEY = "sB7w0MyBj_u6ayu_0";
@@ -2546,7 +2547,7 @@ function downloadActivityPdf(){
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.40";
+const APP_VERSION = "1.41";
 const APP_BUILD_DATE = "2026-09-22";
 
 
@@ -3799,6 +3800,47 @@ async function pushForceRefresh(){
   toast('Update pushed — open devices will reload within a few seconds.');
 }
 
+// ---- Stale-version banner ----
+// Different from Force Refresh above (an admin explicitly pushes a reload to
+// everyone): this is passive and automatic. Every loaded page reports its own
+// version to Firebase, and if a client discovers a newer version is already live
+// than what it's running, it shows a dismissible-by-reloading banner. Answers
+// "is this actually the current version?" without anyone opening DevTools.
+function versionIsNewer(a, b){
+  const pa = String(a).split('.').map(n=>parseInt(n,10)||0);
+  const pb = String(b).split('.').map(n=>parseInt(n,10)||0);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const x=pa[i]||0, y=pb[i]||0;
+    if(x!==y) return x>y;
+  }
+  return false;
+}
+function showStaleVersionBanner(liveVersion){
+  if(document.getElementById('staleVersionBanner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'staleVersionBanner';
+  bar.style.cssText = 'position:fixed; left:0; right:0; bottom:0; z-index:9999; background:var(--flag); color:#fff; padding:14px 16px; font-family:var(--sans); font-size:14px; display:flex; align-items:center; justify-content:space-between; gap:12px; box-shadow:0 -2px 12px rgba(0,0,0,.25);';
+  bar.innerHTML = `<span>This isn't the current version — you're on v${APP_VERSION}, the latest live is v${liveVersion}. Reload to get the update.</span>
+    <button class="btn btn-small" style="background:#fff; color:var(--flag); flex-shrink:0;" id="staleVersionReloadBtn">Reload now</button>`;
+  document.body.appendChild(bar);
+  document.getElementById('staleVersionReloadBtn')?.addEventListener('click', ()=>location.reload());
+}
+function watchAppVersion(){
+  refAppVersionInfo.on('value', snap=>{
+    const info = snap.val();
+    if(!info || !info.version) return;
+    if(versionIsNewer(info.version, APP_VERSION)) showStaleVersionBanner(info.version);
+  });
+  // Only ever move the shared "latest known version" forward, so a straggler tab
+  // loading late never makes tabs already on the newer version think they're stale.
+  refAppVersionInfo.once('value').then(snap=>{
+    const info = snap.val();
+    if(!info || !info.version || versionIsNewer(APP_VERSION, info.version)){
+      refAppVersionInfo.set({ version: APP_VERSION, buildDate: APP_BUILD_DATE, at: Date.now() });
+    }
+  }).catch(err=>console.warn('App version check failed (non-fatal):', err));
+}
+
 // ---- Barcode / Service Tag Scanner ----
 let scanInstance = null;
 let scanBusy = false;
@@ -4976,6 +5018,7 @@ renderAppVersion();
   initTempPickers();
   await ensureAnonAuth();
   watchForceRefresh();
+  watchAppVersion();
   await migrateOldDataIfNeeded();
   await loadSuperadmins();
   await loadStaffNotes();
