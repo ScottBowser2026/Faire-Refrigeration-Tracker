@@ -1379,8 +1379,36 @@ function openLoginModal(){
 }
 function closeLoginModal(){ document.getElementById('loginOverlay').classList.remove('show'); }
 
+// Re-reads superadmins/lancelotMgmt/every site's users fresh from the database,
+// so a login attempt is never checked against a stale in-memory cache. Those
+// arrays are normally kept "live" by .on('value') listeners set up once at page
+// load, but if the anonymous auth session backing this tab ever goes stale
+// (see ensureAnonAuth's comment) those listeners can silently stop receiving
+// updates — nothing throws, they just freeze at whatever they last had. That's
+// exactly what caused this on 2026-09-22: a PIN reset wrote a real new PIN to
+// the database and even emailed it, but login kept comparing against the OLD
+// cached PIN and called it "Incorrect." On any failure here we fall back to
+// whatever's already cached rather than blocking login outright — a stale
+// cache during a genuine outage is still better than no login at all.
+async function refreshLoginCachesFresh(){
+  try{
+    await ensureAnonAuth();
+    const [saSnap, lmSnap] = await Promise.all([refSuperadmins.once('value'), refLancelotMgmt.once('value')]);
+    superadmins = saSnap.exists() ? objToArray(saSnap.val()).map(migratePersonRecord) : [];
+    lancelotMgmt = lmSnap.exists() ? objToArray(lmSnap.val()).map(migratePersonRecord) : [];
+    await Promise.all(SUPERADMIN_SITE_ORDER.map(async key=>{
+      const snap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
+      siteUsersCache[key] = snap.exists() ? objToArray(snap.val()).map(migratePersonRecord) : [];
+    }));
+  }catch(err){
+    console.error('Login cache refresh failed, falling back to cached data:', err);
+  }
+}
+
 async function submitLogin(){
   const pin = document.getElementById('login_pin').value.trim();
+  document.getElementById('loginError').textContent="";
+  await refreshLoginCachesFresh();
   const match = findLoginMatch(pin);
   if(!match){ document.getElementById('loginError').textContent="Incorrect PIN."; return; }
   currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
