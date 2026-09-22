@@ -1,0 +1,53 @@
+diff --git a/index.html b/index.html
+index f9a6e01..b1e3e75 100644
+--- a/index.html
++++ b/index.html
+@@ -278,6 +278,7 @@
+       <option value="chest-freezer">Chest Freezer</option>
+       <option value="bain-marie">Bain Marie</option>
+       <option value="glycol-chiller">Glycol Chiller</option>
++      <option value="kitchen-equipment">Kitchen Equipment</option>
+       <option value="other">Other</option>
+     </select>
+     <select id="filterStatus">
+@@ -547,6 +548,7 @@
+         <option value="chest-freezer">Chest Freezer</option>
+         <option value="bain-marie">Bain Marie</option>
+         <option value="glycol-chiller">Glycol Chiller</option>
++        <option value="kitchen-equipment">Kitchen Equipment</option>
+         <option value="other">Other</option>
+       </select></div>
+       <div class="field"><label>Runtime</label><select id="u_runtime"><option value="always">Always on</option><option value="seasonal">Seasonal</option><option value="off">Off / Out of service</option></select></div>
+@@ -1033,7 +1035,7 @@ function migratePersonRecord(p){
+   }
+   return p;
+ }
+-const VALID_UNIT_TYPES = ['walk-in-cooler','walk-in-freezer','upright-refrigerator','upright-freezer','chest-freezer','bain-marie','glycol-chiller','other'];
++const VALID_UNIT_TYPES = ['walk-in-cooler','walk-in-freezer','upright-refrigerator','upright-freezer','chest-freezer','bain-marie','glycol-chiller','kitchen-equipment','other'];
+ function migrateUnitType(u){
+   if(VALID_UNIT_TYPES.includes(u.type)) return u;
+   const old = { 'cooler':'walk-in-cooler', 'freezer':'walk-in-freezer' }[u.type];
+@@ -3277,11 +3279,13 @@ function inferEquipmentType(text){
+   if(t.includes('chest') && t.includes('freezer')) return 'chest-freezer';
+   if(t.includes('bain')) return 'bain-marie';
+   if(t.includes('glycol') || t.includes('gycol')) return 'glycol-chiller';
++  if(t.includes('oven') || t.includes('range') || t.includes('grill') || t.includes('fryer') || t.includes('hood')) return 'kitchen-equipment';
+   return 'other';
+ }
+ function equipTypeLabel(type){
+   return { 'walk-in-cooler':'Walk-in Cooler', 'walk-in-freezer':'Walk-in Freezer', 'upright-refrigerator':'Upright Refrigerator',
+-    'upright-freezer':'Upright Freezer', 'chest-freezer':'Chest Freezer', 'bain-marie':'Bain Marie', 'glycol-chiller':'Glycol Chiller', 'other':'Other' }[type] || 'Other';
++    'upright-freezer':'Upright Freezer', 'chest-freezer':'Chest Freezer', 'bain-marie':'Bain Marie', 'glycol-chiller':'Glycol Chiller',
++    'kitchen-equipment':'Kitchen Equipment', 'other':'Other' }[type] || 'Other';
+ }
+ function parseCsvSimple(text){
+   return text.split(/\r?\n/).filter(l=>l.trim().length>0).map(line=>line.split(',').map(cell=>cell.trim().replace(/^"|"$/g,'')));
+@@ -3321,7 +3325,7 @@ function previewCsvImport(){
+ }
+ function renderCsvPreviewList(){
+   const wrap = document.getElementById('csvPreviewList');
+-  const typeOptions = ['walk-in-cooler','walk-in-freezer','upright-refrigerator','upright-freezer','chest-freezer','bain-marie','glycol-chiller','other'];
++  const typeOptions = ['walk-in-cooler','walk-in-freezer','upright-refrigerator','upright-freezer','chest-freezer','bain-marie','glycol-chiller','kitchen-equipment','other'];
+   wrap.innerHTML = pendingCsvUnits.map((u,i)=>`
+     <div style="display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); font-size:13px;">
+       <div style="flex:1;"><b>${escapeHtml(u.booth)}</b> — ${escapeHtml(u.name)}</div>
