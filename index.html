@@ -428,15 +428,6 @@
     </div>
 
     <div class="panel">
-      <div style="font-weight:700; font-size:13px; margin-bottom:4px;">Notify List <span class="hint">(this site only)</span></div>
-      <div style="font-size:12px; color:#777; margin-bottom:10px;">Everyone here gets this site's flagged-unit alerts, not-checked reports, and master reports.</div>
-      <div id="recipientList"></div>
-      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-        <input type="text" id="newRecipientName" placeholder="Name" style="flex:1; min-width:120px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
-        <input type="text" id="newRecipientEmail" placeholder="Email address" style="flex:1; min-width:180px; padding:8px 9px; border:1px solid var(--border); border-radius:7px;">
-        <button class="btn btn-primary btn-small" id="addRecipientBtn">Add</button>
-      </div>
-    </div>
 
     <div class="section-head"><h2>Alert Log</h2><span class="hint">Every failure alert and whether it actually got delivered</span></div>
     <div class="panel" id="alertLogPanel" style="margin-bottom:20px;">
@@ -863,7 +854,6 @@
     <div id="reportBody" style="max-height:50vh; overflow-y:auto; margin:10px 0;"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeReportModal()">Close</button>
-      <button class="btn btn-primary" id="emailReportBtn" onclick="emailNotCheckedReport()">Email Notify List</button>
     </div>
   </div>
 </div>
@@ -876,7 +866,6 @@
     <div id="masterReportBody" style="max-height:55vh; overflow-y:auto; margin:10px 0;"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeMasterReportModal()">Close</button>
-      <button class="btn btn-primary" onclick="sendMasterReport()">Email Notify List</button>
     </div>
   </div>
 </div>
@@ -2497,6 +2486,9 @@ async function maybeSendFailureAlert(u, reading){
     // suppressed, so the log shows the full picture without spamming phones.
     const alreadyToday = (alertLog||[]).some(a=>a.unitId===u.id && a.dateKey===todayKey && a.suppressed!==true);
     const reasons = complianceReasons(u).join(', ') || 'out of compliance';
+    const tooWarm = u.currentTemp!=null && u.tmax!=null && u.currentTemp > u.tmax;
+    const hardware = u.fansOperating===false || u.compressorOperating===false;
+    const textWorthy = tooWarm || hardware;
     const managers = fbManagersAtSite(currentSite);
     const withPhones = managers.filter(m=>m.phone && String(m.phone).trim());
 
@@ -2513,35 +2505,21 @@ async function maybeSendFailureAlert(u, reading){
       reasons,
       loggedBy: currentUser,
       suppressed: alreadyToday,
-      smsTo: alreadyToday ? [] : withPhones.map(m=>({ name: fullName(m), phone: String(m.phone).trim() })),
-      smsStatus: alreadyToday ? 'suppressed' : (withPhones.length ? 'pending' : 'no-phone-numbers'),
-      emailStatus: 'pending'
+      textWorthy,
+      smsTo: (alreadyToday || !textWorthy) ? [] : withPhones.map(m=>({ name: fullName(m), phone: String(m.phone).trim() })),
+      // 'queued' is picked up by the 30-minute batch sweep in the Cloud Function.
+      smsStatus: !textWorthy ? 'no-text-too-cold'
+               : alreadyToday ? 'suppressed'
+               : (withPhones.length ? 'queued' : 'no-phone-numbers')
     };
 
     alertLog.push(entry);
     await persistAlertLog();
 
-    if(alreadyToday){ renderAlertLog(); return; }
-
-    // Email via EmailJS, straight away.
-    const subject = `REFRIGERATION ALERT — ${u.name} — ${SITES[currentSite].name}`;
-    const body = `${unitGroupKey(u)} — ${u.name}\n\nOUT OF COMPLIANCE: ${reasons}\nReading: ${entry.reading}\nTarget: ${u.tmin}-${u.tmax}°F\n${u.serviceId?`Service ID: ${u.serviceId}\n`:''}\nLogged by ${currentUser} at ${fmtDate(entry.at)}.`;
-    let emailOk = false;
-    try{ emailOk = await sendToNotifyListQuiet(subject, body); }catch(e){ console.error('alert email failed', e); }
-
-    const idx = alertLog.findIndex(a=>a.id===entry.id);
-    if(idx>-1){ alertLog[idx].emailStatus = emailOk ? 'sent' : 'failed'; await persistAlertLog(); }
     renderAlertLog();
   }catch(err){
     console.error('Failure alert error:', err);   // never block saving a check
   }
-}
-// Same as sendToNotifyList but without the toast — alerts fire in the background.
-async function sendToNotifyListQuiet(subject, bodyText){
-  if(!recipients || recipients.length===0) return false;
-  let anySent=false;
-  for(const r of recipients){ try{ if(await sendEmailTo(r.email, subject, bodyText)) anySent=true; }catch(e){} }
-  return anySent;
 }
 
 // ---- Alert log ----
@@ -2560,12 +2538,11 @@ function renderAlertLog(){
   wrap.innerHTML = rows.map(a=>{
     const sms = a.smsStatus==='sent' ? pill('SMS SENT','#2f6b3a','#e3ede1')
       : a.smsStatus==='failed' ? pill('SMS FAILED','#fff','var(--flag)')
+      : a.smsStatus==='queued' ? pill('QUEUED — next batch','#7a5c1e','#fdf4e7')
       : a.smsStatus==='pending' ? pill('SMS PENDING','#7a5c1e','#fdf4e7')
       : a.smsStatus==='suppressed' ? pill('SUPPRESSED (already alerted today)','#666','#eceee9')
+      : a.smsStatus==='no-text-too-cold' ? pill('FLAGGED — no text (below minimum)','#666','#eceee9')
       : pill('NO PHONE NUMBERS','#fff','var(--flag)');
-    const em = a.emailStatus==='sent' ? pill('EMAIL SENT','#2f6b3a','#e3ede1')
-      : a.emailStatus==='failed' ? pill('EMAIL FAILED','#fff','var(--flag)')
-      : pill('EMAIL PENDING','#7a5c1e','#fdf4e7');
     const who = (a.smsTo||[]).map(t=>escapeHtml(t.name)).join(', ');
     return `<div style="padding:10px 0; border-bottom:1px solid var(--border);">
       <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
@@ -2576,7 +2553,7 @@ function renderAlertLog(){
           <div style="font-family:var(--mono); font-size:11px; color:#888;">${fmtDate(a.at)} · logged by ${escapeHtml(a.loggedBy||'—')}${who?` · texted ${who}`:''}</div>
           ${a.smsError?`<div style="font-size:11.5px; color:var(--flag);">${escapeHtml(a.smsError)}</div>`:''}
         </div>
-        <div style="display:flex; gap:5px; align-items:flex-start; flex-wrap:wrap;">${sms}${em}</div>
+        <div style="display:flex; gap:5px; align-items:flex-start; flex-wrap:wrap;">${sms}</div>
       </div>
     </div>`;
   }).join('');
@@ -3493,9 +3470,7 @@ const TEMP_LOW_SENTINEL = -99;   // stored value for "< -10"
 const TEMP_HIGH_SENTINEL = 99;   // stored value for "> 65"
 function tempOptionsHtml(placeholder){
   let html = `<option value="">${placeholder||'Select temp °F'}</option>`;
-  html += `<option value="${TEMP_LOW_SENTINEL}">&lt; -10 °F</option>`;
   for(let t=-10; t<=65; t++) html += `<option value="${t}">${t} °F</option>`;
-  html += `<option value="${TEMP_HIGH_SENTINEL}">&gt; 65 °F</option>`;
   return html;
 }
 function tempDisplay(v){
