@@ -1157,8 +1157,8 @@ async function deleteStaffNote(id){
   staffNotes = staffNotes.filter(n=>n.id!==id);
   await refStaffNotes.set(arrayToObj(staffNotes));
 }
-document.getElementById('postStaffNoteBtn').addEventListener('click', postStaffNote);
-document.getElementById('staffNotesOverlay').addEventListener('click', e=>{ if(e.target.id==='staffNotesOverlay') closeStaffNotesModal(); });
+document.getElementById('postStaffNoteBtn')?.addEventListener('click', postStaffNote);
+document.getElementById('staffNotesOverlay')?.addEventListener('click', e=>{ if(e.target.id==='staffNotesOverlay') closeStaffNotesModal(); });
 
 async function loadAllSiteUsersForLogin(){
   for(const key of SUPERADMIN_SITE_ORDER){
@@ -1317,11 +1317,11 @@ function renderRoleControls(){
       <span style="font-weight:600;">${escapeHtml(currentUser)}</span>
       <button class="btn who-btn btn-small" id="staffNotesBtn">📣 Staff Notes<span id="staffNotesBadge" style="display:none; background:var(--flag); color:#fff; border-radius:10px; padding:1px 6px; font-size:10.5px; margin-left:5px;"></span></button>
       <button class="btn who-btn btn-small" id="logoutBtn">Log Out</button>`;
-    document.getElementById('logoutBtn').addEventListener('click', logout);
-    document.getElementById('staffNotesBtn').addEventListener('click', openStaffNotesModal);
+    document.getElementById('logoutBtn')?.addEventListener('click', logout);
+    document.getElementById('staffNotesBtn')?.addEventListener('click', openStaffNotesModal);
     updateStaffNotesBadge();
     if(isSuperadmin()){
-      document.getElementById('siteSwitcher').addEventListener('change', async (e)=>{
+      document.getElementById('siteSwitcher')?.addEventListener('change', async (e)=>{
         currentSite = e.target.value;
         sessionStorage.setItem('rt_last_site', currentSite);
         await loadSiteData(currentSite);
@@ -1363,7 +1363,7 @@ function renderRoleControls(){
     }
   } else {
     whoBox.innerHTML = `<button class="btn who-btn btn-small" id="loginBtn">Log In</button>`;
-    document.getElementById('loginBtn').addEventListener('click', openLoginModal);
+    document.getElementById('loginBtn')?.addEventListener('click', openLoginModal);
   }
 }
 function showApp(show){
@@ -1428,7 +1428,7 @@ async function submitLogin(){
   handleDeepLink();
   maybePromptForPhone(match);
 }
-document.getElementById('login_pin').addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
+document.getElementById('login_pin')?.addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
 
 function maybePromptForPhone(match){
   if(match.user.phone) return;
@@ -2071,8 +2071,8 @@ function updateUcServiceIdVisibility(){
   wrap.style.display = (u && !u.serviceId) ? 'block' : 'none';
   if(wrap.style.display==='block') document.getElementById('uc_service_id').value = '';
 }
-document.getElementById('uc_equipment').addEventListener('change', updateUcServiceIdVisibility);
-document.getElementById('uc_booth').addEventListener('change', populateUserEquipmentSelect);
+document.getElementById('uc_equipment')?.addEventListener('change', updateUcServiceIdVisibility);
+document.getElementById('uc_booth')?.addEventListener('change', populateUserEquipmentSelect);
 function updateUcTypeVisibility(){
   const type = document.getElementById('uc_type').value;
   document.getElementById('uc_tempFieldsWrap').style.display = type==='check' ? 'block' : 'none';
@@ -2080,8 +2080,8 @@ function updateUcTypeVisibility(){
 }
 // Changing the entry type changes which units are selectable (e.g. "Turn unit
 // back ON" needs to list off units, which are hidden from every other view).
-document.getElementById('uc_type').addEventListener('change', renderUserWorkerList);
-document.getElementById('uc_type').addEventListener('change', updateUcTypeVisibility);
+document.getElementById('uc_type')?.addEventListener('change', renderUserWorkerList);
+document.getElementById('uc_type')?.addEventListener('change', updateUcTypeVisibility);
 function setUcDefaults(){
   document.getElementById('uc_checkedby').value = currentUser || '';
   const now = new Date(); now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -2394,7 +2394,7 @@ function renderActivityTab(){
         <div style="font-size:13px;">${idle.map(u=>`${escapeHtml(fullName(u))} <span style="font-family:var(--mono); font-size:11px; color:#888;">(${roleLabel(u.role)})</span>`).join(' · ')}</div>
       </div>` : '');
 }
-document.getElementById('activityRange').addEventListener('change', renderActivityTab);
+document.getElementById('activityRange')?.addEventListener('change', renderActivityTab);
 
 // ---- Activity PDF ----
 // Same numbers as the on-screen tab (buildCoverage + buildActivityTally),
@@ -2732,7 +2732,7 @@ function openUnitCostModal(unitId){
   document.getElementById('unitCostOverlay').classList.add('show');
 }
 function closeUnitCostModal(){ document.getElementById('unitCostOverlay').classList.remove('show'); }
-document.getElementById('unitCostOverlay').addEventListener('click', e=>{ if(e.target.id==='unitCostOverlay') closeUnitCostModal(); });
+document.getElementById('unitCostOverlay')?.addEventListener('click', e=>{ if(e.target.id==='unitCostOverlay') closeUnitCostModal(); });
 
 // ---- Bulk cost import ----
 // Loads historical vendor invoices in one pass. Each row is written as a closed,
@@ -2771,7 +2771,7 @@ function openImportCostsModal(){
 }
 function closeImportCostsModal(){ document.getElementById('importCostsOverlay').classList.remove('show'); }
 
-document.getElementById('costs_csv_file').addEventListener('change', async e=>{
+document.getElementById('costs_csv_file')?.addEventListener('change', async e=>{
   const file = e.target.files[0];
   const prev = document.getElementById('costsImportPreview');
   const btn = document.getElementById('costsImportConfirmBtn');
@@ -2887,7 +2887,7 @@ async function confirmCostsImport(){
   toast(`Imported ${pendingCostRows.length} cost record(s).`);
   pendingCostRows = null;
 }
-document.getElementById('importCostsBtn').addEventListener('click', openImportCostsModal);
+document.getElementById('importCostsBtn')?.addEventListener('click', openImportCostsModal);
 
 // ---- Unmapped Service IDs (Costs tab) — cost-import rows that didn't match any unit,
 // queued in previewCsvImport's file handler above, waiting for an admin to pick the
@@ -2989,9 +2989,9 @@ async function dismissUnmappedCost(i){
   renderCostsTab();
   toast('Dismissed.');
 }
-document.getElementById('importCostsOverlay').addEventListener('click', e=>{ if(e.target.id==='importCostsOverlay') closeImportCostsModal(); });
+document.getElementById('importCostsOverlay')?.addEventListener('click', e=>{ if(e.target.id==='importCostsOverlay') closeImportCostsModal(); });
 
-document.getElementById('addPriorRepairBtn').addEventListener('click', openPriorRepairModal);
+document.getElementById('addPriorRepairBtn')?.addEventListener('click', openPriorRepairModal);
 
 function renderCostsTab(){
   const totalPanel = document.getElementById('costsTotalPanel');
@@ -3278,7 +3278,7 @@ function csvLabelToRole(label){
   if(l.includes('account')) return 'accounting';
   return 'crew';
 }
-document.getElementById('exportUsersCsvBtn').addEventListener('click', ()=>{
+document.getElementById('exportUsersCsvBtn')?.addEventListener('click', ()=>{
   const list = siteUsersCache[currentSite] || [];
   const lines = ['FirstName,LastName,Email,Phone,Role,PIN'];
   list.forEach(u=>{
@@ -3292,7 +3292,7 @@ document.getElementById('exportUsersCsvBtn').addEventListener('click', ()=>{
   URL.revokeObjectURL(url);
   toast(`Downloaded ${list.length} user(s).`);
 });
-document.getElementById('downloadUsersCsvTemplateBtn').addEventListener('click', ()=>{
+document.getElementById('downloadUsersCsvTemplateBtn')?.addEventListener('click', ()=>{
   const lines = [
     'FirstName,LastName,Email,Phone,Role,PIN',
     '"Kaitlyn","Brown","kaitlyn@example.com","555-1212","User",""',
@@ -3370,15 +3370,15 @@ async function confirmUserCsvImport(){
   closeUserCsvImportModal();
   renderAccessList(); renderUnitAssignments();
 }
-document.getElementById('importUsersCsvBtn').addEventListener('click', openUserCsvImportModal);
-document.getElementById('user_csv_file').addEventListener('change', (e)=>{
+document.getElementById('importUsersCsvBtn')?.addEventListener('click', openUserCsvImportModal);
+document.getElementById('user_csv_file')?.addEventListener('change', (e)=>{
   const file = e.target.files[0]; if(!file) return;
   const reader = new FileReader();
   reader.onload = ()=>{ document.getElementById('user_csv_text').value = reader.result; };
   reader.readAsText(file);
 });
 
-document.getElementById('deleteAllUsersBtn').addEventListener('click', async ()=>{
+document.getElementById('deleteAllUsersBtn')?.addEventListener('click', async ()=>{
   const list = siteUsersCache[currentSite] || [];
   if(list.length===0){ toast('No Site Users to delete.'); return; }
   if(!confirm(`Delete ALL ${list.length} Site Users at ${SITES[currentSite].name}? Superadmins and Lancelot Management are NOT affected. This cannot be undone — consider clicking "Download CSV" first as a backup.`)) return;
@@ -3389,7 +3389,7 @@ document.getElementById('deleteAllUsersBtn').addEventListener('click', async ()=
   renderAccessList(); renderUnitAssignments();
 });
 
-document.getElementById('deleteAllUnitsBtn').addEventListener('click', async ()=>{
+document.getElementById('deleteAllUnitsBtn')?.addEventListener('click', async ()=>{
   if(units.length===0){ toast('No units to delete.'); return; }
   if(!confirm(`Delete ALL ${units.length} units (and all their history, tickets, and PM tasks) at ${SITES[currentSite].name}? This cannot be undone.`)) return;
   if(!confirm('Really sure? Every unit, every logged check, every maintenance ticket and PM task at this site will be permanently gone.')) return;
@@ -3544,8 +3544,8 @@ async function confirmCsvImport(){
   closeCsvImportModal();
   render(); renderFleetChart(); renderUnitAssignments(); renderUserWorkerList();
 }
-document.getElementById('importCsvBtn').addEventListener('click', openCsvImportModal);
-document.getElementById('downloadCsvTemplateBtn').addEventListener('click', ()=>{
+document.getElementById('importCsvBtn')?.addEventListener('click', openCsvImportModal);
+document.getElementById('downloadCsvTemplateBtn')?.addEventListener('click', ()=>{
   const existingLocations = [...new Set(units.map(u=>unitGroupKey(u)).filter(k=>k && k!=='Ungrouped'))].sort();
   const lines = ['location,Equipment,Equipment,Equipment,Equipment'];
   if(existingLocations.length>0){
@@ -3562,7 +3562,7 @@ document.getElementById('downloadCsvTemplateBtn').addEventListener('click', ()=>
   URL.revokeObjectURL(url);
   toast(existingLocations.length>0 ? `Template downloaded with ${existingLocations.length} existing location(s) — fill in equipment for each.` : 'Blank template downloaded with example rows.');
 });
-document.getElementById('csv_file').addEventListener('change', (e)=>{
+document.getElementById('csv_file')?.addEventListener('change', (e)=>{
   const file = e.target.files[0]; if(!file) return;
   const reader = new FileReader();
   reader.onload = ()=>{ document.getElementById('csv_text').value = reader.result; };
@@ -3641,20 +3641,20 @@ async function saveUnit(){
     toast('Saved.');
   }
 }
-document.getElementById('deleteUnitBtn').addEventListener('click', async ()=>{
+document.getElementById('deleteUnitBtn')?.addEventListener('click', async ()=>{
   if(!editingUnitId) return;
   if(!confirm('Delete this unit and all its history? This cannot be undone.')) return;
   units = units.filter(x=>x.id!==editingUnitId);
   await persistUnits(); closeUnitModal(); render(); renderFleetChart(); toast('Unit deleted.');
 });
-document.getElementById('resetUnitStatusBtn').addEventListener('click', async ()=>{
+document.getElementById('resetUnitStatusBtn')?.addEventListener('click', async ()=>{
   if(!editingUnitId || !isSuperadmin()) return;
   const u = units.find(x=>x.id===editingUnitId); if(!u) return;
   if(!confirm(`Reset ${u.name}'s current status back to "not checked"? This clears the live temp/fans/compressor reading but keeps its full history. Cannot be undone.`)) return;
   u.currentTemp=null; u.fansOperating=null; u.compressorOperating=null; u.lastCheckBy=null; u.lastCheckAt=null;
   await persistUnits(); render(); renderFleetChart(); renderIncidents(); toast(`${u.name}'s status reset.`);
 });
-document.getElementById('clearUnitHistoryBtn').addEventListener('click', async ()=>{
+document.getElementById('clearUnitHistoryBtn')?.addEventListener('click', async ()=>{
   if(!editingUnitId || !isSuperadmin()) return;
   const u = units.find(x=>x.id===editingUnitId); if(!u) return;
   if(!confirm(`Erase all logged checks, tickets, and PM records for ${u.name}, and reset its current status back to "not checked"? The unit itself stays, but its entire history disappears and any flagged state clears. Cannot be undone.`)) return;
@@ -3721,7 +3721,7 @@ function beginForcedReload(){
   bar.innerHTML = `<span>An update is ready. This page will reload in <b id="fr_count">${secs}</b>s — finish and submit anything you're typing.</span>
     <button class="btn btn-primary btn-small" id="fr_now" style="flex-shrink:0;">Reload now</button>`;
   document.body.appendChild(bar);
-  document.getElementById('fr_now').addEventListener('click', ()=>location.reload());
+  document.getElementById('fr_now')?.addEventListener('click', ()=>location.reload());
   const iv = setInterval(()=>{
     secs--;
     const c = document.getElementById('fr_count');
@@ -3866,12 +3866,12 @@ function routeScannedUnitToMaintenance(unit){
   }
   openTicketModal(unit.id);
 }
-document.getElementById('scanBarcodeBtn').addEventListener('click', ()=>openScanModal('lookup'));
-document.getElementById('scanBarcodeBtnUser').addEventListener('click', ()=>openScanModal('lookup'));
-document.getElementById('scanBarcodeBtnMaint').addEventListener('click', ()=>openScanModal('lookup'));
-document.getElementById('scanToFillBarcodeBtn').addEventListener('click', ()=>openScanModal('fill'));
-document.getElementById('scanLinkConfirmBtn').addEventListener('click', confirmLinkScannedTag);
-document.getElementById('scanOverlay').addEventListener('click', e=>{ if(e.target.id==='scanOverlay') closeScanModal(); });
+document.getElementById('scanBarcodeBtn')?.addEventListener('click', ()=>openScanModal('lookup'));
+document.getElementById('scanBarcodeBtnUser')?.addEventListener('click', ()=>openScanModal('lookup'));
+document.getElementById('scanBarcodeBtnMaint')?.addEventListener('click', ()=>openScanModal('lookup'));
+document.getElementById('scanToFillBarcodeBtn')?.addEventListener('click', ()=>openScanModal('fill'));
+document.getElementById('scanLinkConfirmBtn')?.addEventListener('click', confirmLinkScannedTag);
+document.getElementById('scanOverlay')?.addEventListener('click', e=>{ if(e.target.id==='scanOverlay') closeScanModal(); });
 
 function openCheckModal(unitId){
   checkingUnitId = unitId;
@@ -3902,7 +3902,7 @@ function updateTempFieldsVisibility(){
   const u = units.find(x=>x.id===checkingUnitId);
   document.getElementById('serviceIdWrap').style.display = (type==='check' && u && !u.serviceId) ? 'block' : 'none';
 }
-document.getElementById('c_type').addEventListener('change', updateTempFieldsVisibility);
+document.getElementById('c_type')?.addEventListener('change', updateTempFieldsVisibility);
 // Shrinks and re-encodes a photo in the browser before it's stored. Photos are
 // saved as base64 text directly in the database, so a raw 3-5MB iPhone shot would
 // bloat the record badly. This resizes to fit within maxDim and steps the JPEG
@@ -4442,8 +4442,8 @@ async function restateReport(){
   openDailyReportModal(r.id);
   toast(`${r.date} restated from history.`);
 }
-document.getElementById('restateReportBtn').addEventListener('click', restateReport);
-document.getElementById('submitDailyReportBtn').addEventListener('click', submitDailyReport);
+document.getElementById('restateReportBtn')?.addEventListener('click', restateReport);
+document.getElementById('submitDailyReportBtn')?.addEventListener('click', submitDailyReport);
 
 function renderFleetChart(){
   const canvas = document.getElementById('fleetChart'); if(!canvas) return;
@@ -4538,7 +4538,7 @@ function openIncidentsModal(){
   document.getElementById('incidentsOverlay').classList.add('show');
 }
 function closeIncidentsModal(){ document.getElementById('incidentsOverlay').classList.remove('show'); }
-document.getElementById('viewAllIncidentsBtn').addEventListener('click', openIncidentsModal);
+document.getElementById('viewAllIncidentsBtn')?.addEventListener('click', openIncidentsModal);
 
 // ---- Manage Access: Superadmins (superadmin-only) ----
 let editingSuperadminId = null;
@@ -4597,7 +4597,7 @@ function isPinTakenAnywhere(pin, excludeId){
   return false;
 }
 
-document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>{
+document.getElementById('addSuperadminBtn')?.addEventListener('click', async ()=>{
   const firstName = document.getElementById('newSAFirst').value.trim();
   const lastName = document.getElementById('newSALast').value.trim();
   const email = document.getElementById('newSAEmail').value.trim();
@@ -4614,7 +4614,7 @@ document.getElementById('addSuperadminBtn').addEventListener('click', async ()=>
   toast(!typedPin ? `Added ${firstName} as Superadmin — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName} as Superadmin.`);
 });
 
-document.getElementById('addLancelotMgmtBtn').addEventListener('click', async ()=>{
+document.getElementById('addLancelotMgmtBtn')?.addEventListener('click', async ()=>{
   const firstName = document.getElementById('newLMFirst').value.trim();
   const lastName = document.getElementById('newLMLast').value.trim();
   const email = document.getElementById('newLMEmail').value.trim();
@@ -4807,7 +4807,7 @@ async function saveSiteUserEdit(id){
   editingSiteUserId = null;
   await persistSiteUsers(); renderAccessList(); toast('Saved.');
 }
-document.getElementById('addPersonBtn').addEventListener('click', async ()=>{
+document.getElementById('addPersonBtn')?.addEventListener('click', async ()=>{
   const firstName = document.getElementById('newPersonFirst').value.trim();
   const lastName = document.getElementById('newPersonLast').value.trim();
   const email = document.getElementById('newPersonEmail').value.trim();
@@ -4839,7 +4839,7 @@ function renderRecipientList(){
   wrap.innerHTML = recipients.map(r=>`<div class="access-row"><b>${escapeHtml(r.name)}</b><span style="color:#888;">${escapeHtml(r.email)}</span><span style="flex:1;"></span>
     <button class="btn btn-outline btn-small" onclick="removeRecipient('${r.id}')">Remove</button></div>`).join('');
 }
-document.getElementById('addRecipientBtn').addEventListener('click', async ()=>{
+document.getElementById('addRecipientBtn')?.addEventListener('click', async ()=>{
   const name = document.getElementById('newRecipientName').value.trim();
   const email = document.getElementById('newRecipientEmail').value.trim();
   if(!name||!email){ toast('Enter both a name and an email.'); return; }
@@ -4853,16 +4853,16 @@ async function removeRecipient(id){
   await persistRecipients(); toast('Removed from Notify List.');
 }
 
-document.getElementById('addBtn').addEventListener('click', openAddModal);
-document.getElementById('filterType').addEventListener('change', render);
-document.getElementById('filterStatus').addEventListener('change', render);
-document.getElementById('searchBox').addEventListener('input', render);
-document.getElementById('unitOverlay').addEventListener('click', e=>{ if(e.target.id==='unitOverlay') closeUnitModal(); });
-document.getElementById('checkOverlay').addEventListener('click', e=>{ if(e.target.id==='checkOverlay') closeCheckModal(); });
-document.getElementById('reportOverlay').addEventListener('click', e=>{ if(e.target.id==='reportOverlay') closeReportModal(); });
-document.getElementById('masterReportOverlay').addEventListener('click', e=>{ if(e.target.id==='masterReportOverlay') closeMasterReportModal(); });
-document.getElementById('historyOverlay').addEventListener('click', e=>{ if(e.target.id==='historyOverlay') closeHistoryModal(); });
-document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.target.id==='incidentsOverlay') closeIncidentsModal(); });
+document.getElementById('addBtn')?.addEventListener('click', openAddModal);
+document.getElementById('filterType')?.addEventListener('change', render);
+document.getElementById('filterStatus')?.addEventListener('change', render);
+document.getElementById('searchBox')?.addEventListener('input', render);
+document.getElementById('unitOverlay')?.addEventListener('click', e=>{ if(e.target.id==='unitOverlay') closeUnitModal(); });
+document.getElementById('checkOverlay')?.addEventListener('click', e=>{ if(e.target.id==='checkOverlay') closeCheckModal(); });
+document.getElementById('reportOverlay')?.addEventListener('click', e=>{ if(e.target.id==='reportOverlay') closeReportModal(); });
+document.getElementById('masterReportOverlay')?.addEventListener('click', e=>{ if(e.target.id==='masterReportOverlay') closeMasterReportModal(); });
+document.getElementById('historyOverlay')?.addEventListener('click', e=>{ if(e.target.id==='historyOverlay') closeHistoryModal(); });
+document.getElementById('incidentsOverlay')?.addEventListener('click', e=>{ if(e.target.id==='incidentsOverlay') closeIncidentsModal(); });
 
 async function ensureAnonAuth(){
   try{
@@ -4892,7 +4892,7 @@ async function ensureAnonAuth(){
   }
 }
 
-document.getElementById('forceRefreshBtn').addEventListener('click', pushForceRefresh);
+document.getElementById('forceRefreshBtn')?.addEventListener('click', pushForceRefresh);
 
 function renderAppVersion(){
   const el = document.getElementById('appVersionFooter');
