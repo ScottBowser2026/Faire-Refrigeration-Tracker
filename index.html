@@ -1482,23 +1482,29 @@ async function sendForgotPin(){
   // Deliberately vague either way — don't reveal whether an email is on file.
   const genericMsg = "If that email is on file, a new PIN has been sent to it.";
 
-  // Re-read fresh from the database right before matching AND before writing —
-  // never trust the in-memory superadmins/siteUsersCache arrays for this. Those
-  // are kept "live" by .on('value') listeners, but if this tab's connection ever
-  // missed an update, or another admin's tab still holds an older snapshot and
-  // saves something unrelated in between, matching against — or writing back —
-  // the cached copy can silently revert a just-changed PIN or email to a stale
-  // value with no error anywhere. (This is what happened to Scott on 2026-09-22:
-  // a reset succeeded and emailed a real PIN, but a subsequent unrelated save
-  // from stale in-memory data overwrote the record back, so the emailed PIN no
-  // longer matched and a second reset attempt couldn't find the record at all.)
-  // Forgot-PIN is rare enough that a handful of extra reads here is the right
-  // trade for correctness — this is not a hot path.
   // Everything below can fail on a flaky connection or an auth/rules hiccup —
   // wrapped in try/catch so "Checking…" never sits there forever with nothing
   // telling the person (or us) what actually happened. Anything caught here is
   // also logged to the console so it's diagnosable from a screenshot/F12 report.
   try{
+    // The login screen can sit open a long time before anyone uses Forgot PIN, so
+    // re-validate the anonymous session here too rather than only at page load —
+    // ensureAnonAuth() now detects and repairs a stale/invalidated session (see
+    // its own comment) instead of leaving every read below permission_denied.
+    await ensureAnonAuth();
+
+    // Re-read fresh from the database right before matching AND before writing —
+    // never trust the in-memory superadmins/siteUsersCache arrays for this. Those
+    // are kept "live" by .on('value') listeners, but if this tab's connection ever
+    // missed an update, or another admin's tab still holds an older snapshot and
+    // saves something unrelated in between, matching against — or writing back —
+    // the cached copy can silently revert a just-changed PIN or email to a stale
+    // value with no error anywhere. (This is what happened to Scott on 2026-09-22:
+    // a reset succeeded and emailed a real PIN, but a subsequent unrelated save
+    // from stale in-memory data overwrote the record back, so the emailed PIN no
+    // longer matched and a second reset attempt couldn't find the record at all.)
+    // Forgot-PIN is rare enough that a handful of extra reads here is the right
+    // trade for correctness — this is not a hot path.
     let found = null; // { scope:'superadmin'|'site', siteKey, freshList, index }
 
     const saSnap = await refSuperadmins.once('value');
@@ -4832,6 +4838,22 @@ document.getElementById('incidentsOverlay').addEventListener('click', e=>{ if(e.
 
 async function ensureAnonAuth(){
   try{
+    if(firebase.auth().currentUser){
+      // Firebase persists the anonymous session across reloads, so a hard refresh
+      // alone won't catch this: if that anonymous account was ever invalidated or
+      // cleaned up server-side, the SDK still reports currentUser as signed in
+      // locally, but every database read/write then fails with permission_denied
+      // because the server no longer honors the token. Force a token refresh to
+      // detect that up front and re-authenticate instead of leaving every
+      // subsequent call silently broken (2026-09-22: this is what caused
+      // sendForgotPin's permission_denied on /refrigeration/superadmins).
+      try{
+        await firebase.auth().currentUser.getIdToken(true);
+      }catch(staleErr){
+        console.warn('Stale anonymous session detected, re-authenticating:', staleErr);
+        try{ await firebase.auth().signOut(); }catch(e){}
+      }
+    }
     if(!firebase.auth().currentUser){
       await firebase.auth().signInAnonymously();
     }
