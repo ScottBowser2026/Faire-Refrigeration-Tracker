@@ -535,6 +535,7 @@
         <a href="#" style="font-size:12.5px; color:var(--frost-deep); text-decoration:underline;" onclick="closeForgotPin(); return false;">Back to login</a>
       </div>
     </div>
+    <div id="loginVersionFooter" style="margin-top:18px; font-family:var(--mono); font-size:10.5px; color:#9aa29b;"></div>
   </div>
 </div>
 
@@ -2542,8 +2543,8 @@ function downloadActivityPdf(){
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.37";
-const APP_BUILD_DATE = "2026-09-16";
+const APP_VERSION = "1.38";
+const APP_BUILD_DATE = "2026-09-22";
 
 
 // ---- Failure alerting ----
@@ -4895,11 +4896,18 @@ async function ensureAnonAuth(){
 document.getElementById('forceRefreshBtn')?.addEventListener('click', pushForceRefresh);
 
 function renderAppVersion(){
+  const versionText = `Refrigeration Tracker · v${APP_VERSION} · built ${APP_BUILD_DATE}`;
   const el = document.getElementById('appVersionFooter');
-  if(el) el.textContent = `Refrigeration Tracker · v${APP_VERSION} · built ${APP_BUILD_DATE}`;
+  if(el) el.textContent = versionText;
   const fr = document.getElementById('frVersionHere');
   if(fr) fr.textContent = `v${APP_VERSION}`;
+  const lv = document.getElementById('loginVersionFooter');
+  if(lv) lv.textContent = versionText;
 }
+// Called here (not just inside init() below) so the version/build stamp shows on the
+// login screen immediately, even if something later in this script throws before
+// init() ever runs — this is the fastest way to confirm what's actually live.
+renderAppVersion();
 
 (async function init(){
   renderAppVersion();
