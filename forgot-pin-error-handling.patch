@@ -1,0 +1,77 @@
+diff --git a/index.html b/index.html
+index ec16125..e752932 100644
+--- a/index.html
++++ b/index.html
+@@ -1494,36 +1494,46 @@ async function sendForgotPin(){
+   // longer matched and a second reset attempt couldn't find the record at all.)
+   // Forgot-PIN is rare enough that a handful of extra reads here is the right
+   // trade for correctness — this is not a hot path.
+-  let found = null; // { scope:'superadmin'|'site', siteKey, freshList, index }
+-
+-  const saSnap = await refSuperadmins.once('value');
+-  const freshSuperadmins = saSnap.exists() ? objToArray(saSnap.val()) : [];
+-  const saIdx = freshSuperadmins.findIndex(u=>u.email && u.email.trim().toLowerCase()===email);
+-  if(saIdx>-1) found = { scope:'superadmin', freshList: freshSuperadmins, index: saIdx };
+-
+-  if(!found){
+-    for(const key of SUPERADMIN_SITE_ORDER){
+-      const snap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
+-      const freshList = snap.exists() ? objToArray(snap.val()) : [];
+-      const idx = freshList.findIndex(u=>u.email && u.email.trim().toLowerCase()===email);
+-      if(idx>-1){ found = { scope:'site', siteKey:key, freshList, index: idx }; break; }
++  // Everything below can fail on a flaky connection or an auth/rules hiccup —
++  // wrapped in try/catch so "Checking…" never sits there forever with nothing
++  // telling the person (or us) what actually happened. Anything caught here is
++  // also logged to the console so it's diagnosable from a screenshot/F12 report.
++  try{
++    let found = null; // { scope:'superadmin'|'site', siteKey, freshList, index }
++
++    const saSnap = await refSuperadmins.once('value');
++    const freshSuperadmins = saSnap.exists() ? objToArray(saSnap.val()) : [];
++    const saIdx = freshSuperadmins.findIndex(u=>u.email && u.email.trim().toLowerCase()===email);
++    if(saIdx>-1) found = { scope:'superadmin', freshList: freshSuperadmins, index: saIdx };
++
++    if(!found){
++      for(const key of SUPERADMIN_SITE_ORDER){
++        const snap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
++        const freshList = snap.exists() ? objToArray(snap.val()) : [];
++        const idx = freshList.findIndex(u=>u.email && u.email.trim().toLowerCase()===email);
++        if(idx>-1){ found = { scope:'site', siteKey:key, freshList, index: idx }; break; }
++      }
+     }
+-  }
+ 
+-  if(!found){
+-    msg.style.color='#888'; msg.textContent = genericMsg;
+-    return;
+-  }
++    if(!found){
++      msg.style.color='#888'; msg.textContent = genericMsg;
++      return;
++    }
+ 
+-  const newPin = generateUniquePin(); // checks against other live PINs, not just a random 4-digit draw
+-  found.freshList[found.index].pin = newPin;
+-  if(found.scope==='superadmin') await refSuperadmins.set(arrayToObj(found.freshList));
+-  else await db.ref('refrigeration/sites/'+found.siteKey+'/users').set(arrayToObj(found.freshList));
++    const newPin = generateUniquePin(); // checks against other live PINs, not just a random 4-digit draw
++    found.freshList[found.index].pin = newPin;
++    if(found.scope==='superadmin') await refSuperadmins.set(arrayToObj(found.freshList));
++    else await db.ref('refrigeration/sites/'+found.siteKey+'/users').set(arrayToObj(found.freshList));
+ 
+-  const record = found.freshList[found.index];
+-  const sent = await sendEmailTo(record.email, "Your Refrigeration Tracker PIN", `Hi ${fullName(record)},\n\nYour new PIN is: ${newPin}\n\n(You requested this from the login screen.)`);
+-  msg.style.color = sent ? '#888' : 'var(--flag)';
+-  msg.textContent = sent ? genericMsg : "Something went wrong sending the email — try again.";
++    const record = found.freshList[found.index];
++    const sent = await sendEmailTo(record.email, "Your Refrigeration Tracker PIN", `Hi ${fullName(record)},\n\nYour new PIN is: ${newPin}\n\n(You requested this from the login screen.)`);
++    msg.style.color = sent ? '#888' : 'var(--flag)';
++    msg.textContent = sent ? genericMsg : "Something went wrong sending the email — try again.";
++  }catch(err){
++    console.error('sendForgotPin failed:', err);
++    msg.style.color='var(--flag)';
++    msg.textContent = "Couldn't reach the server — check your connection and try again.";
++  }
+ }
+ 
+ // ---- Units grid ----
