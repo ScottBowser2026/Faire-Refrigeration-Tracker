@@ -157,24 +157,29 @@ exports.dailyReportCentral = onSchedule(
 );
 
 // ============================================================================
-// Failure SMS alerts
+// Failure SMS alerts — 30-minute batch
 // ============================================================================
-// The app writes an alert record when a check puts a unit out of compliance;
-// this fires on that write and texts the F&B Managers listed on it. Twilio
-// credentials live in Firebase secrets, never in the client, which is the whole
-// reason this has to run server-side.
+// The app queues an alert record when a check puts a unit out of compliance.
+// This sweeps every site every 30 minutes and sends ONE text per manager
+// covering everything queued in that window, rather than a message per unit —
+// a crew member working through a round of failing units would otherwise
+// trigger a burst of separate texts.
 //
-// It writes delivery status back onto the same record so the Alert Log in the
-// app shows what actually got delivered rather than what was merely attempted.
-// A text that silently fails is worse than no alerting, because you'd assume
-// someone was told.
+// Trade-off worth knowing: a failure can wait up to 30 minutes before anyone's
+// phone buzzes. The app flags it on screen immediately either way.
+//
+// Delivery status is written back onto each record so the Alert Log shows what
+// actually went out. A text that silently fails is worse than no alerting,
+// because you'd assume someone was told.
 
-const { onValueCreated } = require("firebase-functions/v2/database");
+const { onSchedule: onScheduleAlerts } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 
 const TWILIO_ACCOUNT_SID = defineSecret("TWILIO_ACCOUNT_SID");
 const TWILIO_AUTH_TOKEN = defineSecret("TWILIO_AUTH_TOKEN");
 const TWILIO_FROM_NUMBER = defineSecret("TWILIO_FROM_NUMBER");
+
+const ALL_SITES = ["parf", "srf", "krf", "garf", "test"];
 
 // Twilio wants E.164 (+15555551212). Accept whatever people typed.
 function toE164(raw) {
@@ -186,72 +191,89 @@ function toE164(raw) {
   return null;
 }
 
-exports.sendFailureAlertSms = onValueCreated(
+async function sweepSite(siteKey, client, from) {
+  const ref = db.ref(`refrigeration/sites/${siteKey}/alertLog`);
+  const snap = await ref.get();
+  if (!snap.exists()) return 0;
+
+  const all = snap.val();
+  const queued = Object.keys(all)
+    .map((id) => ({ id, ...all[id] }))
+    .filter((a) => a.smsStatus === "queued");
+  if (queued.length === 0) return 0;
+
+  // Everyone who should be texted across this batch, de-duplicated by number.
+  const byPhone = new Map();
+  queued.forEach((a) => {
+    (a.smsTo || []).forEach((r) => {
+      const to = toE164(r.phone);
+      if (to && !byPhone.has(to)) byPhone.set(to, r.name);
+    });
+  });
+
+  if (byPhone.size === 0) {
+    await Promise.all(queued.map((a) => ref.child(a.id).update({ smsStatus: "no-phone-numbers" })));
+    return 0;
+  }
+
+  const lines = queued.map((a) => `• ${a.booth || ""} ${a.unitName || ""} — ${a.reasons || "out of compliance"}`);
+  const siteName = (queued[0] && queued[0].site) || siteKey;
+  const body =
+    `REFRIGERATION ALERT — ${String(siteName).toUpperCase()}\n` +
+    `${queued.length} unit${queued.length === 1 ? "" : "s"} out of compliance:\n` +
+    lines.join("\n");
+
+  let sent = 0;
+  const failures = [];
+  for (const [to, name] of byPhone.entries()) {
+    try {
+      await client.messages.create({ body, from, to });
+      sent++;
+    } catch (err) {
+      console.error(`SMS to ${name} (${to}) failed:`, err && err.message);
+      failures.push(`${name}: ${(err && err.message) || "send failed"}`);
+    }
+  }
+
+  const status = sent > 0 ? "sent" : "failed";
+  const processedAt = new Date().toISOString();
+  await Promise.all(
+    queued.map((a) =>
+      ref.child(a.id).update({
+        smsStatus: status,
+        smsSentCount: sent,
+        smsBatchSize: queued.length,
+        smsError: failures.length ? failures.join("; ") : null,
+        smsProcessedAt: processedAt,
+      })
+    )
+  );
+
+  console.log(`[${siteKey}] Batch: ${queued.length} alert(s), ${sent}/${byPhone.size} recipients texted.`);
+  return sent;
+}
+
+exports.sendQueuedAlertSms = onScheduleAlerts(
   {
-    ref: "/refrigeration/sites/{siteKey}/alertLog/{alertId}",
+    schedule: "every 30 minutes",
+    timeZone: "America/New_York",
     secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER],
   },
-  async (event) => {
-    const alert = event.data.val();
-    if (!alert) return;
-
-    // The app marks repeat failures on the same unit/day as suppressed, and
-    // records when nobody has a phone number. Nothing to send in either case.
-    if (alert.suppressed === true) return;
-    if (alert.smsStatus !== "pending") return;
-
-    const recipients = Array.isArray(alert.smsTo) ? alert.smsTo : [];
-    const ref = event.data.ref;
-
-    if (recipients.length === 0) {
-      await ref.update({ smsStatus: "no-phone-numbers" });
-      return;
-    }
-
-    const body =
-      `REFRIGERATION ALERT\n` +
-      `${alert.booth || ""} - ${alert.unitName || ""}\n` +
-      `${alert.reasons || "out of compliance"}\n` +
-      `Reading: ${alert.reading || "n/a"}\n` +
-      `Logged by ${alert.loggedBy || "unknown"}`;
-
+  async () => {
     let client;
     try {
       client = require("twilio")(TWILIO_ACCOUNT_SID.value(), TWILIO_AUTH_TOKEN.value());
     } catch (err) {
       console.error("Twilio init failed:", err);
-      await ref.update({ smsStatus: "failed", smsError: "Twilio credentials not configured" });
       return;
     }
-
     const from = TWILIO_FROM_NUMBER.value();
-    let sent = 0;
-    const failures = [];
-
-    for (const r of recipients) {
-      const to = toE164(r.phone);
-      if (!to) {
-        failures.push(`${r.name}: unreadable number "${r.phone}"`);
-        continue;
-      }
+    for (const siteKey of ALL_SITES) {
       try {
-        await client.messages.create({ body, from, to });
-        sent++;
+        await sweepSite(siteKey, client, from);
       } catch (err) {
-        console.error(`SMS to ${r.name} (${to}) failed:`, err && err.message);
-        failures.push(`${r.name}: ${(err && err.message) || "send failed"}`);
+        console.error(`Sweep failed for ${siteKey}:`, err);
       }
     }
-
-    // Partial success still counts as sent — somebody was reached — but the
-    // failures are recorded so a consistently bad number gets noticed.
-    await ref.update({
-      smsStatus: sent > 0 ? "sent" : "failed",
-      smsSentCount: sent,
-      smsError: failures.length ? failures.join("; ") : null,
-      smsProcessedAt: new Date().toISOString(),
-    });
-
-    console.log(`[${alert.site}] Alert ${event.params.alertId}: ${sent}/${recipients.length} SMS sent.`);
   }
 );
