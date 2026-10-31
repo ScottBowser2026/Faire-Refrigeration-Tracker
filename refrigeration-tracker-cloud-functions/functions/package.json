@@ -2,7 +2,7 @@
   "name": "refrigeration-tracker-functions",
   "description": "Cloud Functions for the Refrigeration Tracker (daily report + failure SMS alerts)",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "dependencies": {
