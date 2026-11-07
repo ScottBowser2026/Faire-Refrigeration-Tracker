@@ -40,6 +40,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -1072,38 +1073,13 @@ function arrayToObj(arr){ const o={}; arr.forEach(u=>{ const {id,...rest}=u; o[i
 
 function siteRef(path, siteKey){ return db.ref('refrigeration/sites/'+(siteKey||currentSite)+'/'+path); }
 
-// ---- One-time migration of old single-site data into sites/parf ----
-async function migrateOldDataIfNeeded(){
-  const newUnitsSnap = await siteRef('units','parf').once('value');
-  if(newUnitsSnap.exists()) return; // already migrated
-  const oldUnitsSnap = await db.ref('refrigeration/units').once('value');
-  if(!oldUnitsSnap.exists()) return; // nothing to migrate
-  await siteRef('units','parf').set(oldUnitsSnap.val());
-  const oldUsersSnap = await db.ref('refrigeration/users').once('value');
-  if(oldUsersSnap.exists()){
-    // old users become PARF site admins (all were admin:true/false before — preserve that as role)
-    const oldUsers = objToArray(oldUsersSnap.val());
-    const converted = {};
-    oldUsers.forEach(u=>{
-      converted[u.id] = { name:u.name, email:u.email||null, phone:null, pin:u.pin, role:u.admin?'admin':'crew' };
-    });
-    await siteRef('users','parf').set(converted);
-  }
-  const oldRecipSnap = await db.ref('refrigeration/notifyRecipients').once('value');
-  if(oldRecipSnap.exists()) await siteRef('notifyRecipients','parf').set(oldRecipSnap.val());
-  console.log('Migrated old single-site data into sites/parf.');
-}
-
 async function loadSuperadmins(){
   const snap = await refSuperadmins.once('value');
-  let needsPersist = !snap.exists();
+  let needsPersist = false;
   superadmins = snap.exists() ? objToArray(snap.val()).map(p=>{
     if(!p.firstName && !p.lastName && p.name) needsPersist = true;
     return migratePersonRecord(p);
-  }) : [
-    { id: uid(), firstName:'Scott', lastName:'', email:null, phone:null, pin:'1905' },
-    { id: uid(), firstName:'Daniel', lastName:'', email:null, phone:null, pin:'2026' }
-  ];
+  }) : [];
   if(needsPersist) await refSuperadmins.set(arrayToObj(superadmins));
   refSuperadmins.on('value', s=>{ superadmins = s.exists()?objToArray(s.val()).map(migratePersonRecord):[]; renderSuperadminList(); });
 }
@@ -1163,17 +1139,20 @@ async function deleteStaffNote(id){
 document.getElementById('postStaffNoteBtn')?.addEventListener('click', postStaffNote);
 document.getElementById('staffNotesOverlay')?.addEventListener('click', e=>{ if(e.target.id==='staffNotesOverlay') closeStaffNotesModal(); });
 
-async function loadAllSiteUsersForLogin(){
-  for(const key of SUPERADMIN_SITE_ORDER){
+// Loads (and live-syncs) the user lists this person is allowed to see: every
+// site for a Superadmin, only their own site for everyone else.
+async function loadVisibleSiteUsers(){
+  const keys = isSuperadmin() ? SUPERADMIN_SITE_ORDER : isLancelotMgmt() ? [] : [currentSite];
+  for(const key of keys){
     const initialSnap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
     let needsPersist = false;
     siteUsersCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()).map(p=>{
       if(!p.firstName && !p.lastName && p.name) needsPersist = true;
       return migratePersonRecord(p);
     }) : [];
-    if(needsPersist) await db.ref('refrigeration/sites/'+key+'/users').set(arrayToObj(siteUsersCache[key]));
+    if(needsPersist && isSiteAdmin()) await db.ref('refrigeration/sites/'+key+'/users').set(arrayToObj(siteUsersCache[key]));
   }
-  for(const key of SUPERADMIN_SITE_ORDER){
+  for(const key of keys){
     db.ref('refrigeration/sites/'+key+'/users').on('value', snap=>{
       siteUsersCache[key] = snap.exists() ? objToArray(snap.val()).map(migratePersonRecord) : [];
       renderAllSitesOverview();
@@ -1194,6 +1173,7 @@ async function loadLancelotMgmt(){
 }
 
 async function loadAllSiteUnitsForSummary(){
+  if(!isSuperadmin() && !isLancelotMgmt()) return; // only they see the all-sites summary
   for(const key of SITE_ORDER){
     const initialSnap = await db.ref('refrigeration/sites/'+key+'/units').once('value');
     siteUnitsCache[key] = initialSnap.exists() ? objToArray(initialSnap.val()) : [];
@@ -1206,16 +1186,46 @@ async function loadAllSiteUnitsForSummary(){
   }
 }
 
-function findLoginMatch(pin){
-  const sa = superadmins.find(u=>String(u.pin)===pin);
-  if(sa) return { role:'superadmin', user:sa, site:null };
-  const lm = lancelotMgmt.find(u=>String(u.pin)===pin);
-  if(lm) return { role:'lancelot', user:lm, site:null };
-  for(const key of SUPERADMIN_SITE_ORDER){
-    const match = (siteUsersCache[key]||[]).find(u=>String(u.pin)===pin);
-    if(match) return { role:match.role||'crew', user:match, site:key };
-  }
-  return null;
+// ---- Server-side login ----
+// PINs are checked by the rtLogin Cloud Function, never in the browser. A
+// successful login stamps this tab's anonymous Firebase account with claims
+// (rtRole/rtSite/rtUid/rtUntil); the database rules grant access from those,
+// so nothing is readable before login. Auth persistence is per-tab (SESSION),
+// matching the old sessionStorage behaviour: closing the tab logs you out.
+const fns = firebase.functions();
+let sessionUntil = 0;
+let sessionExpiryTimer = null;
+function callFn(name, data){ return fns.httpsCallable(name)(data||{}).then(r=>r.data); }
+
+// Applies a verified identity and loads everything that person can see.
+async function startSession(who){
+  currentUser = who.name; currentUserId = who.userId; currentRole = who.role;
+  sessionUntil = who.until;
+  clearInterval(sessionExpiryTimer);
+  sessionExpiryTimer = setInterval(()=>{ if(Date.now() > sessionUntil) logout('Your session expired — please log in again.'); }, 60000);
+  if(who.role!=='lancelot') currentSite = who.site || sessionStorage.getItem('rt_last_site') || 'parf';
+  if(isSuperadmin()){ await loadSuperadmins(); await loadLancelotMgmt(); }
+  await loadStaffNotes();
+  await loadVisibleSiteUsers();
+  await loadAllSiteUnitsForSummary();
+  if(who.role!=='lancelot') await loadSiteData(currentSite);
+}
+
+// Who this tab is logged in as, from its token's claims — or null.
+async function sessionFromToken(){
+  const u = firebase.auth().currentUser; if(!u) return null;
+  const c = (await u.getIdTokenResult()).claims;
+  if(!c.rtUid || !c.rtRole || !(c.rtUntil > Date.now())) return null;
+  return { role:c.rtRole, site:c.rtSite==='-'?null:c.rtSite, userId:c.rtUid, until:c.rtUntil, name:null };
+}
+
+// The display name and phone aren't in the claims; read them from the
+// record this person is allowed to see.
+async function myRecord(who){
+  const path = who.role==='superadmin' ? 'refrigeration/superadmins/'+who.userId
+    : who.role==='lancelot' ? 'refrigeration/lancelotManagement/'+who.userId
+    : 'refrigeration/sites/'+who.site+'/users/'+who.userId;
+  try{ return (await db.ref(path).once('value')).val(); }catch(e){ return null; }
 }
 
 // ---- Site-scoped data loading (re-attached whenever site changes) ----
@@ -1263,7 +1273,7 @@ async function loadSiteData(siteKey){
   if(alertLogListenerRef) alertLogListenerRef.off();
   alertLogListenerRef = siteRef('alertLog', siteKey);
   alertLogListenerRef.on('value', snap=>{ alertLog = snap.exists()?objToArray(snap.val()):[]; renderAlertLog(); });
-  usersListenerRef = null; // users are now kept in sync globally via loadAllSiteUsersForLogin's live listeners
+  usersListenerRef = null; // users are kept in sync via loadVisibleSiteUsers' live listeners
 }
 
 async function persistUnits(){ await siteRef('units').set(arrayToObj(units)); }
@@ -1384,59 +1394,39 @@ function openLoginModal(){
 }
 function closeLoginModal(){ document.getElementById('loginOverlay').classList.remove('show'); }
 
-// Re-reads superadmins/lancelotMgmt/every site's users fresh from the database,
-// so a login attempt is never checked against a stale in-memory cache. Those
-// arrays are normally kept "live" by .on('value') listeners set up once at page
-// load, but if the anonymous auth session backing this tab ever goes stale
-// (see ensureAnonAuth's comment) those listeners can silently stop receiving
-// updates — nothing throws, they just freeze at whatever they last had. That's
-// exactly what caused this on 2026-09-22: a PIN reset wrote a real new PIN to
-// the database and even emailed it, but login kept comparing against the OLD
-// cached PIN and called it "Incorrect." On any failure here we fall back to
-// whatever's already cached rather than blocking login outright — a stale
-// cache during a genuine outage is still better than no login at all.
-async function refreshLoginCachesFresh(){
+let loginInFlight = false;
+async function submitLogin(){
+  if(loginInFlight) return;
+  const pin = document.getElementById('login_pin').value.trim();
+  const errEl = document.getElementById('loginError');
+  errEl.textContent="";
+  loginInFlight = true;
   try{
     await ensureAnonAuth();
-    const [saSnap, lmSnap] = await Promise.all([refSuperadmins.once('value'), refLancelotMgmt.once('value')]);
-    superadmins = saSnap.exists() ? objToArray(saSnap.val()).map(migratePersonRecord) : [];
-    lancelotMgmt = lmSnap.exists() ? objToArray(lmSnap.val()).map(migratePersonRecord) : [];
-    await Promise.all(SUPERADMIN_SITE_ORDER.map(async key=>{
-      const snap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
-      siteUsersCache[key] = snap.exists() ? objToArray(snap.val()).map(migratePersonRecord) : [];
-    }));
-  }catch(err){
-    console.error('Login cache refresh failed, falling back to cached data:', err);
-  }
-}
-
-async function submitLogin(){
-  const pin = document.getElementById('login_pin').value.trim();
-  document.getElementById('loginError').textContent="";
-  await refreshLoginCachesFresh();
-  const match = findLoginMatch(pin);
-  if(!match){ document.getElementById('loginError').textContent="Incorrect PIN."; return; }
-  currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
-  closeLoginModal();
-  if(match.role==='lancelot'){
-    sessionStorage.setItem('rt_session_pin', pin);
+    const who = await callFn('rtLogin', { pin });
+    await firebase.auth().currentUser.getIdToken(true); // pick up the new claims before any read
+    closeLoginModal();
+    await startSession(who);
     showApp(true); renderRoleControls();
-    toast(`Logged in as ${fullName(match.user)} (Lancelot Management).`);
-    maybePromptForPhone(match);
-    return;
+    if(who.role==='lancelot'){
+      toast(`Logged in as ${who.name} (Lancelot Management).`);
+    } else {
+      render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenanceFrontPanel(); renderMaintenancePmDueList(); renderDailyReportsList(); renderAlertLog(); renderUserWorkerList(); renderUnitAssignments(); renderSuperadminList(); autoGenerateDailyReportIfDue(); checkUnreadYesterdayReport();
+      toast(`Logged in as ${who.name} (${SITES[currentSite].name}).`);
+      handleDeepLink();
+    }
+    maybePromptForPhone(who.hasPhone);
+  }catch(err){
+    console.error('Login failed:', err);
+    errEl.textContent = (err && err.message) || "Couldn't log in — check your connection and try again.";
+  }finally{
+    loginInFlight = false;
   }
-  currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
-  sessionStorage.setItem('rt_session_pin', pin);
-  await loadSiteData(currentSite);
-  showApp(true); renderRoleControls(); render(); renderFleetChart(); renderIncidents(); renderAccessList(); renderRecipientList(); renderAllSitesOverview(); renderMaintenanceWorkerList(); renderMaintenanceTicketsOverview(); renderMaintenanceFrontPanel(); renderMaintenancePmDueList(); renderDailyReportsList(); renderAlertLog(); renderUserWorkerList(); renderUnitAssignments(); renderSuperadminList(); autoGenerateDailyReportIfDue(); checkUnreadYesterdayReport();
-  toast(`Logged in as ${fullName(match.user)} (${SITES[currentSite].name}).`);
-  handleDeepLink();
-  maybePromptForPhone(match);
 }
 document.getElementById('login_pin')?.addEventListener('keydown', e=>{ if(e.key==='Enter') submitLogin(); });
 
-function maybePromptForPhone(match){
-  if(match.user.phone) return;
+function maybePromptForPhone(hasPhone){
+  if(hasPhone) return;
   if(sessionStorage.getItem('rt_phone_prompt_dismissed')) return;
   document.getElementById('add_phone_number').value = '';
   document.getElementById('addPhoneOverlay').classList.add('show');
@@ -1444,13 +1434,13 @@ function maybePromptForPhone(match){
 async function saveAddPhone(){
   const phone = document.getElementById('add_phone_number').value.trim();
   if(!phone){ toast('Enter a phone number, or tap Skip for now.'); return; }
-  if(currentRole==='superadmin'){
-    const u = superadmins.find(x=>x.id===currentUserId); if(u){ u.phone=phone; await persistSuperadmins(); }
-  } else if(currentRole==='lancelot'){
-    const u = lancelotMgmt.find(x=>x.id===currentUserId); if(u){ u.phone=phone; await persistLancelotMgmt(); }
-  } else {
-    const list = siteUsersCache[currentSite]||[]; const u = list.find(x=>x.id===currentUserId); if(u){ u.phone=phone; await persistSiteUsers(); }
-  }
+  // Writes just this person's own phone field — the only part of a user list
+  // the rules let a non-manager change.
+  const path = currentRole==='superadmin' ? 'refrigeration/superadmins/'+currentUserId
+    : currentRole==='lancelot' ? 'refrigeration/lancelotManagement/'+currentUserId
+    : 'refrigeration/sites/'+currentSite+'/users/'+currentUserId;
+  try{ await db.ref(path+'/phone').set(phone); }
+  catch(err){ console.error('Saving phone failed:', err); toast("Couldn't save that — try again."); return; }
   document.getElementById('addPhoneOverlay').classList.remove('show');
   sessionStorage.setItem('rt_phone_prompt_dismissed','1');
   toast('Phone number saved.');
@@ -1473,21 +1463,31 @@ function handleDeepLink(){
   if(unitId && view==='pm'){ openPmModal(unitId); return; }
 }
 
+// After a reload in the same tab, the claims are still on this tab's
+// anonymous account — no PIN needs to be kept around to restore the session.
 async function restoreSession(){
-  const pin = sessionStorage.getItem('rt_session_pin');
-  if(!pin) return false;
-  const match = findLoginMatch(pin);
-  if(!match) return false;
-  currentUser = fullName(match.user); currentUserId = match.user.id; currentRole = match.role;
-  if(match.role==='lancelot') return true; // no site to load
-  currentSite = match.site || sessionStorage.getItem('rt_last_site') || 'parf';
-  await loadSiteData(currentSite);
-  return true;
+  try{
+    const who = await sessionFromToken();
+    if(!who) return false;
+    const rec = await myRecord(who);
+    if(!rec) return false; // removed, or role changed — the rules won't let them in
+    who.name = fullName(migratePersonRecord(rec));
+    await startSession(who);
+    return true;
+  }catch(err){
+    console.error('Session restore failed:', err);
+    return false;
+  }
 }
-function logout(){
-  currentUser=""; currentUserId=null; currentRole=null;
+// Clears the claims server-side, then reloads so every live listener and
+// in-memory list from this session is dropped.
+async function logout(message){
+  clearInterval(sessionExpiryTimer);
+  try{ await callFn('rtLogout'); }catch(e){ console.warn('rtLogout failed (signing out anyway):', e); }
+  try{ await firebase.auth().signOut(); }catch(e){}
   sessionStorage.removeItem('rt_session_pin');
-  showApp(false); renderRoleControls(); openLoginModal();
+  if(typeof message === 'string') sessionStorage.setItem('rt_logout_message', message);
+  location.reload();
 }
 
 function openForgotPin(){
@@ -1500,74 +1500,47 @@ function closeForgotPin(){
   document.getElementById('forgotPinBox').style.display='none';
   document.getElementById('loginPanel').style.display='block';
 }
-function generateNewPin(){ return String(Math.floor(1000 + Math.random()*9000)); }
 function emailReady(){ return !!window.emailjs; }
-function generateUniquePin(){
-  let pin, attempts = 0;
-  do { pin = generateNewPin(); attempts++; } while(isPinTakenAnywhere(pin) && attempts < 50);
-  return pin;
+
+// PINs can't be looked up later (the server only keeps a one-way hash), so
+// whenever one is set or generated here, show it once to the person who did it.
+function showPinsOnce(title, rows){
+  const wrap = document.createElement('div');
+  wrap.className = 'overlay show';
+  wrap.style.zIndex = '10000';
+  wrap.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3 style="margin-top:0;">${escapeHtml(title)}</h3>
+    <p style="font-size:13px; color:#888; margin-top:0;">Write these down or pass them on now — PINs can't be shown again. You can always set a new one.</p>
+    <div style="font-family:var(--mono); font-size:14px; line-height:1.9; max-height:50vh; overflow:auto;">
+      ${rows.map(r=>`<div><b>${escapeHtml(r.pin)}</b> &nbsp; ${escapeHtml(r.name)}</div>`).join('')}
+    </div>
+    <div style="text-align:right; margin-top:14px;"><button class="btn btn-primary btn-small">Done</button></div>
+  </div>`;
+  wrap.querySelector('button').addEventListener('click', ()=>wrap.remove());
+  document.body.appendChild(wrap);
 }
+
+// Sets a PIN for an existing person through the server (which also enforces
+// uniqueness and who may change whose PIN). Leave pin blank to have one
+// generated. Resolves to the PIN that was set.
+async function setPinFor(scope, siteKey, userId, pin){
+  const r = await callFn('rtSetPin', { scope, site: scope==='site' ? siteKey : null, userId, pin: pin||'' });
+  return r.pin;
+}
+
+// Forgot PIN: the server picks a new PIN and texts it to the phone on file.
+// It never comes back to this page, since whoever is at the login screen
+// might not be the account owner.
 async function sendForgotPin(){
   const email = document.getElementById('forgot_email').value.trim().toLowerCase();
   const msg = document.getElementById('forgotPinMsg');
   if(!email){ msg.style.color='var(--flag)'; msg.textContent="Enter your email first."; return; }
   msg.style.color='#888'; msg.textContent="Checking…";
-  // Deliberately vague either way — don't reveal whether an email is on file.
-  const genericMsg = "If that email is on file, a new PIN has been sent to it.";
-
-  // Everything below can fail on a flaky connection or an auth/rules hiccup —
-  // wrapped in try/catch so "Checking…" never sits there forever with nothing
-  // telling the person (or us) what actually happened. Anything caught here is
-  // also logged to the console so it's diagnosable from a screenshot/F12 report.
   try{
-    // The login screen can sit open a long time before anyone uses Forgot PIN, so
-    // re-validate the anonymous session here too rather than only at page load —
-    // ensureAnonAuth() now detects and repairs a stale/invalidated session (see
-    // its own comment) instead of leaving every read below permission_denied.
     await ensureAnonAuth();
-
-    // Re-read fresh from the database right before matching AND before writing —
-    // never trust the in-memory superadmins/siteUsersCache arrays for this. Those
-    // are kept "live" by .on('value') listeners, but if this tab's connection ever
-    // missed an update, or another admin's tab still holds an older snapshot and
-    // saves something unrelated in between, matching against — or writing back —
-    // the cached copy can silently revert a just-changed PIN or email to a stale
-    // value with no error anywhere. (This is what happened to Scott on 2026-09-22:
-    // a reset succeeded and emailed a real PIN, but a subsequent unrelated save
-    // from stale in-memory data overwrote the record back, so the emailed PIN no
-    // longer matched and a second reset attempt couldn't find the record at all.)
-    // Forgot-PIN is rare enough that a handful of extra reads here is the right
-    // trade for correctness — this is not a hot path.
-    let found = null; // { scope:'superadmin'|'site', siteKey, freshList, index }
-
-    const saSnap = await refSuperadmins.once('value');
-    const freshSuperadmins = saSnap.exists() ? objToArray(saSnap.val()) : [];
-    const saIdx = freshSuperadmins.findIndex(u=>u.email && u.email.trim().toLowerCase()===email);
-    if(saIdx>-1) found = { scope:'superadmin', freshList: freshSuperadmins, index: saIdx };
-
-    if(!found){
-      for(const key of SUPERADMIN_SITE_ORDER){
-        const snap = await db.ref('refrigeration/sites/'+key+'/users').once('value');
-        const freshList = snap.exists() ? objToArray(snap.val()) : [];
-        const idx = freshList.findIndex(u=>u.email && u.email.trim().toLowerCase()===email);
-        if(idx>-1){ found = { scope:'site', siteKey:key, freshList, index: idx }; break; }
-      }
-    }
-
-    if(!found){
-      msg.style.color='#888'; msg.textContent = genericMsg;
-      return;
-    }
-
-    const newPin = generateUniquePin(); // checks against other live PINs, not just a random 4-digit draw
-    found.freshList[found.index].pin = newPin;
-    if(found.scope==='superadmin') await refSuperadmins.set(arrayToObj(found.freshList));
-    else await db.ref('refrigeration/sites/'+found.siteKey+'/users').set(arrayToObj(found.freshList));
-
-    const record = found.freshList[found.index];
-    const sent = await sendEmailTo(record.email, "Your Refrigeration Tracker PIN", `Hi ${fullName(record)},\n\nYour new PIN is: ${newPin}\n\n(You requested this from the login screen.)`);
-    msg.style.color = sent ? '#888' : 'var(--flag)';
-    msg.textContent = sent ? genericMsg : "Something went wrong sending the email — try again.";
+    const r = await callFn('rtForgotPin', { email });
+    msg.style.color='#888';
+    msg.textContent = r.message + " No phone on file? Ask your manager to set a new PIN for you.";
   }catch(err){
     console.error('sendForgotPin failed:', err);
     msg.style.color='var(--flag)';
@@ -2547,8 +2520,8 @@ function downloadActivityPdf(){
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.41";
-const APP_BUILD_DATE = "2026-09-22";
+const APP_VERSION = "1.42";
+const APP_BUILD_DATE = "2026-11-07";
 
 
 // ---- Failure alerting ----
@@ -3285,9 +3258,11 @@ function csvLabelToRole(label){
 }
 document.getElementById('exportUsersCsvBtn')?.addEventListener('click', ()=>{
   const list = siteUsersCache[currentSite] || [];
+  // PINs live only on the server now, so the PIN column is always blank here.
+  // It stays in the header so an export can be re-imported as-is.
   const lines = ['FirstName,LastName,Email,Phone,Role,PIN'];
   list.forEach(u=>{
-    lines.push([u.firstName||'', u.lastName||'', u.email||'', u.phone||'', roleToCsvLabel(u.role), u.pin||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+    lines.push([u.firstName||'', u.lastName||'', u.email||'', u.phone||'', roleToCsvLabel(u.role), ''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
   });
   const blob = new Blob([lines.join('\n')], { type:'text/csv' });
   const url = URL.createObjectURL(blob);
@@ -3361,17 +3336,24 @@ function renderUserCsvPreviewList(){
 async function confirmUserCsvImport(){
   if(!confirm(`Add ${pendingUserCsv.length} person/people to ${SITES[currentSite].name}?`)) return;
   const list = siteUsersCache[currentSite] || [];
-  const results = [];
-  pendingUserCsv.forEach(p=>{
-    let pin = p.pin;
-    if(pin && (!/^\d{4,6}$/.test(pin) || isPinTakenAnywhere(pin))) pin = ''; // fall back to auto-gen if invalid/taken
-    if(!pin) pin = generateUniquePin();
-    list.push({ id:uid(), firstName:p.firstName, lastName:p.lastName, email:p.email||null, phone:p.phone||null, pin, role:p.role });
-    results.push({ ...p, pin });
-  });
+  const added = pendingUserCsv.map(p=>({ id:uid(), firstName:p.firstName, lastName:p.lastName, email:p.email||null, phone:p.phone||null, role:p.role, wantedPin:p.pin }));
+  added.forEach(({wantedPin, ...rec})=>list.push(rec));
   siteUsersCache[currentSite] = list;
   await persistSiteUsers();
-  toast(`${pendingUserCsv.length} people added.`);
+  // PINs are set one by one through the server. A typed PIN that's invalid
+  // or already taken falls back to a generated one, as before.
+  let failed = 0;
+  const shown = [];
+  for(const p of added){
+    try{
+      let pin;
+      try{ pin = await setPinFor('site', currentSite, p.id, /^\d{4,6}$/.test(p.wantedPin||'') ? p.wantedPin : ''); }
+      catch(err){ if(err && /already-exists|invalid-argument/.test(err.code||'')) pin = await setPinFor('site', currentSite, p.id, ''); else throw err; }
+      shown.push({ name: fullName(p), pin });
+    }catch(err){ failed++; console.error('Setting PIN failed for', p.id, err); }
+  }
+  toast(failed ? `${added.length} people added — ${failed} still need a PIN set (Edit them below).` : `${added.length} people added.`);
+  if(shown.length) showPinsOnce('PINs for the people you just imported', shown);
   closeUserCsvImportModal();
   renderAccessList(); renderUnitAssignments();
 }
@@ -4658,7 +4640,7 @@ function renderSuperadminList(){
         <input class="name-col" style="flex:1 1 90px;" id="edit_sa_last_${u.id}" value="${escapeHtml(u.lastName||'')}" placeholder="Last">
         <input class="email-col" id="edit_sa_email_${u.id}" value="${escapeHtml(u.email||'')}" placeholder="email">
         <input class="phone-col" id="edit_sa_phone_${u.id}" value="${escapeHtml(u.phone||'')}" placeholder="phone">
-        <input class="pin-col" id="edit_sa_pin_${u.id}" value="${escapeHtml(String(u.pin))}">
+        <input class="pin-col" id="edit_sa_pin_${u.id}" value="" placeholder="new PIN" inputmode="numeric" title="Type a new 4-6 digit PIN to change it, or leave blank to keep the current one">
         <button class="btn btn-primary btn-small" onclick="saveSuperadminEdit('${u.id}')">Save</button>
         <button class="btn btn-outline btn-small" onclick="cancelSuperadminEdit()">Cancel</button>
       </div>`;
@@ -4667,7 +4649,7 @@ function renderSuperadminList(){
       <b style="flex:1 1 140px;">${escapeHtml(fullName(u))}</b>
       <span style="color:#888; font-size:12px; flex:1 1 150px;">${escapeHtml(u.email||'no email')}</span>
       <span style="color:#888; font-size:12px; flex:1 1 110px;">${escapeHtml(u.phone||'no phone')}</span>
-      <span class="mono" style="font-size:12.5px;">PIN ${escapeHtml(String(u.pin))}</span>
+      <span class="mono" style="font-size:12.5px;" title="PINs are stored one-way and can't be shown. Use Edit to set a new one.">PIN ••••</span>
       <button class="btn btn-outline btn-small" onclick="editSuperadmin('${u.id}')">Edit</button>
       <button class="btn btn-outline btn-small" onclick="removeSuperadmin('${u.id}')" ${isLastOne?'disabled title="Add another Superadmin before removing this one"':''}>Delete</button>
     </div>`;
@@ -4678,14 +4660,14 @@ function cancelSuperadminEdit(){ editingSuperadminId = null; renderSuperadminLis
 async function saveSuperadminEdit(id){
   const u = superadmins.find(x=>x.id===id); if(!u) return;
   const newPin = document.getElementById(`edit_sa_pin_${id}`).value.trim();
-  if(isPinTakenAnywhere(newPin, id)){ toast('That PIN is already in use by someone else.'); return; }
+  if(newPin && !/^\d{4,6}$/.test(newPin)){ toast('PIN must be 4-6 digits, or leave it blank to keep the current one.'); return; }
   u.firstName = document.getElementById(`edit_sa_first_${id}`).value.trim();
   u.lastName = document.getElementById(`edit_sa_last_${id}`).value.trim();
   u.email = document.getElementById(`edit_sa_email_${id}`).value.trim() || null;
   u.phone = document.getElementById(`edit_sa_phone_${id}`).value.trim() || null;
-  u.pin = newPin;
   editingSuperadminId = null;
-  await persistSuperadmins(); renderSuperadminList(); toast('Saved.');
+  await persistSuperadmins(); renderSuperadminList();
+  await savedWithOptionalPin('superadmin', null, u, newPin);
 }
 async function removeSuperadmin(id){
   if(superadmins.length<=1){ toast("Can't remove the last Superadmin — add another one first."); return; }
@@ -4693,13 +4675,32 @@ async function removeSuperadmin(id){
   superadmins = superadmins.filter(u=>u.id!==id);
   await persistSuperadmins(); toast('Deleted.');
 }
-function isPinTakenAnywhere(pin, excludeId){
-  if(superadmins.some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
-  if(lancelotMgmt.some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
-  for(const key of SUPERADMIN_SITE_ORDER){
-    if((siteUsersCache[key]||[]).some(u=>String(u.pin)===pin && u.id!==excludeId)) return true;
+// After saving someone's details: set the new PIN that was typed, if any.
+async function savedWithOptionalPin(scope, siteKey, u, newPin){
+  if(!newPin){ toast('Saved.'); return; }
+  try{
+    await setPinFor(scope, siteKey, u.id, newPin);
+    toast('Saved — new PIN set.');
+  }catch(err){
+    console.error('Setting PIN failed:', err);
+    toast((err && err.message) || "Saved, but the PIN couldn't be changed — try again.");
   }
-  return false;
+}
+
+// Adds a person's record first (the server only sets PINs for people who
+// exist), then sets their PIN on the server and shows it once.
+async function addPersonWithPin(scope, siteKey, rec, typedPin, emailIntro){
+  let pin;
+  try{
+    pin = await setPinFor(scope, siteKey, rec.id, typedPin);
+  }catch(err){
+    console.error('Setting PIN failed:', err);
+    toast(`Added ${rec.firstName}, but couldn't set that PIN: ${(err && err.message) || 'try again'}. Use Edit to set one.`);
+    return;
+  }
+  if(!typedPin && rec.email && emailReady()) sendEmailTo(rec.email, 'Your Refrigeration Tracker PIN', `Hi ${rec.firstName},\n\n${emailIntro} Your PIN is: ${pin}\n\nUse it at the login screen.`);
+  toast(`Added ${rec.firstName}${!typedPin && rec.email ? ' (PIN emailed to them)' : ''}.`);
+  showPinsOnce(`PIN for ${fullName(rec)}`, [{ name: fullName(rec), pin }]);
 }
 
 document.getElementById('addSuperadminBtn')?.addEventListener('click', async ()=>{
@@ -4710,13 +4711,11 @@ document.getElementById('addSuperadminBtn')?.addEventListener('click', async ()=
   const typedPin = document.getElementById('newSAPin').value.trim();
   if(!firstName){ toast('Enter at least a first name.'); return; }
   if(typedPin && !/^\d{4,6}$/.test(typedPin)){ toast('PIN must be 4-6 digits, or leave it blank to auto-generate one.'); return; }
-  if(typedPin && isPinTakenAnywhere(typedPin)){ toast('That PIN is already in use by someone else in the system.'); return; }
-  const pin = typedPin || generateUniquePin();
-  superadmins.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
+  const rec = { id:uid(), firstName, lastName, email:email||null, phone:phone||null };
+  superadmins.push(rec);
   await persistSuperadmins();
-  if(!typedPin && email && emailReady()) sendEmailTo(email, 'Your Refrigeration Tracker PIN', `Hi ${firstName},\n\nYou've been added as a Superadmin on the Refrigeration Tracker. Your PIN is: ${pin}\n\nUse it at the login screen.`);
   document.getElementById('newSAFirst').value=''; document.getElementById('newSALast').value=''; document.getElementById('newSAEmail').value=''; document.getElementById('newSAPhone').value=''; document.getElementById('newSAPin').value='';
-  toast(!typedPin ? `Added ${firstName} as Superadmin — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName} as Superadmin.`);
+  await addPersonWithPin('superadmin', null, rec, typedPin, "You've been added as a Superadmin on the Refrigeration Tracker.");
 });
 
 document.getElementById('addLancelotMgmtBtn')?.addEventListener('click', async ()=>{
@@ -4727,13 +4726,11 @@ document.getElementById('addLancelotMgmtBtn')?.addEventListener('click', async (
   const typedPin = document.getElementById('newLMPin').value.trim();
   if(!firstName){ toast('Enter at least a first name.'); return; }
   if(typedPin && !/^\d{4,6}$/.test(typedPin)){ toast('PIN must be 4-6 digits, or leave it blank to auto-generate one.'); return; }
-  if(typedPin && isPinTakenAnywhere(typedPin)){ toast('That PIN is already in use by someone else in the system.'); return; }
-  const pin = typedPin || generateUniquePin();
-  lancelotMgmt.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin });
+  const rec = { id:uid(), firstName, lastName, email:email||null, phone:phone||null };
+  lancelotMgmt.push(rec);
   await persistLancelotMgmt();
-  if(!typedPin && email && emailReady()) sendEmailTo(email, 'Your Refrigeration Tracker PIN', `Hi ${firstName},\n\nYou've been added to Lancelot Management on the Refrigeration Tracker. Your PIN is: ${pin}\n\nUse it at the login screen.`);
   document.getElementById('newLMFirst').value=''; document.getElementById('newLMLast').value=''; document.getElementById('newLMEmail').value=''; document.getElementById('newLMPhone').value=''; document.getElementById('newLMPin').value='';
-  toast(!typedPin ? `Added ${firstName} to Lancelot Management — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName} to Lancelot Management.`);
+  await addPersonWithPin('lancelot', null, rec, typedPin, "You've been added to Lancelot Management on the Refrigeration Tracker.");
 });
 
 let editingLancelotMgmtId = null;
@@ -4750,7 +4747,7 @@ function renderLancelotMgmtList(){
         <input class="name-col" style="flex:1 1 90px;" id="edit_lm_last_${u.id}" value="${escapeHtml(u.lastName||'')}" placeholder="Last">
         <input class="email-col" id="edit_lm_email_${u.id}" value="${escapeHtml(u.email||'')}" placeholder="email">
         <input class="phone-col" id="edit_lm_phone_${u.id}" value="${escapeHtml(u.phone||'')}" placeholder="phone">
-        <input class="pin-col" id="edit_lm_pin_${u.id}" value="${escapeHtml(String(u.pin))}">
+        <input class="pin-col" id="edit_lm_pin_${u.id}" value="" placeholder="new PIN" inputmode="numeric" title="Type a new 4-6 digit PIN to change it, or leave blank to keep the current one">
         <button class="btn btn-primary btn-small" onclick="saveLancelotMgmtEdit('${u.id}')">Save</button>
         <button class="btn btn-outline btn-small" onclick="cancelLancelotMgmtEdit()">Cancel</button>
       </div>`;
@@ -4759,7 +4756,7 @@ function renderLancelotMgmtList(){
       <b style="flex:1 1 140px;">${escapeHtml(fullName(u))}</b>
       <span style="color:#888; font-size:12px; flex:1 1 150px;">${escapeHtml(u.email||'no email')}</span>
       <span style="color:#888; font-size:12px; flex:1 1 110px;">${escapeHtml(u.phone||'no phone')}</span>
-      <span class="mono" style="font-size:12.5px;">PIN ${escapeHtml(String(u.pin))}</span>
+      <span class="mono" style="font-size:12.5px;" title="PINs are stored one-way and can't be shown. Use Edit to set a new one.">PIN ••••</span>
       <button class="btn btn-outline btn-small" onclick="editLancelotMgmt('${u.id}')">Edit</button>
       <button class="btn btn-outline btn-small" onclick="removeLancelotMgmt('${u.id}')">Delete</button>
     </div>`;
@@ -4770,14 +4767,14 @@ function cancelLancelotMgmtEdit(){ editingLancelotMgmtId = null; renderLancelotM
 async function saveLancelotMgmtEdit(id){
   const u = lancelotMgmt.find(x=>x.id===id); if(!u) return;
   const newPin = document.getElementById(`edit_lm_pin_${id}`).value.trim();
-  if(isPinTakenAnywhere(newPin, id)){ toast('That PIN is already in use by someone else.'); return; }
+  if(newPin && !/^\d{4,6}$/.test(newPin)){ toast('PIN must be 4-6 digits, or leave it blank to keep the current one.'); return; }
   u.firstName = document.getElementById(`edit_lm_first_${id}`).value.trim();
   u.lastName = document.getElementById(`edit_lm_last_${id}`).value.trim();
   u.email = document.getElementById(`edit_lm_email_${id}`).value.trim() || null;
   u.phone = document.getElementById(`edit_lm_phone_${id}`).value.trim() || null;
-  u.pin = newPin;
   editingLancelotMgmtId = null;
-  await persistLancelotMgmt(); renderLancelotMgmtList(); toast('Saved.');
+  await persistLancelotMgmt(); renderLancelotMgmtList();
+  await savedWithOptionalPin('lancelot', null, u, newPin);
 }
 async function removeLancelotMgmt(id){
   if(!confirm('Delete this Lancelot Management account?')) return;
@@ -4874,7 +4871,7 @@ function renderAccessList(){
         <input class="name-col" style="flex:1 1 80px;" id="edit_su_last_${u.id}" value="${escapeHtml(u.lastName||'')}" placeholder="Last">
         <input class="email-col" id="edit_su_email_${u.id}" value="${escapeHtml(u.email||'')}" placeholder="email">
         <input class="phone-col" id="edit_su_phone_${u.id}" value="${escapeHtml(u.phone||'')}" placeholder="phone">
-        <input class="pin-col" id="edit_su_pin_${u.id}" value="${escapeHtml(String(u.pin))}">
+        <input class="pin-col" id="edit_su_pin_${u.id}" value="" placeholder="new PIN" inputmode="numeric" title="Type a new 4-6 digit PIN to change it, or leave blank to keep the current one">
         <label style="display:flex; align-items:center; gap:5px; font-size:12px; white-space:nowrap;" title="Lets this person be assigned maintenance tickets while keeping their role above">
           <input type="checkbox" id="edit_su_alsomaint_${u.id}" ${u.alsoMaintenance?'checked':''}> also Maint.
         </label>
@@ -4888,7 +4885,7 @@ function renderAccessList(){
       <b style="flex:1 1 120px;">${escapeHtml(fullName(u))}</b>
       <span style="color:#888; font-size:12px; flex:1 1 140px;">${escapeHtml(u.email||'no email')}</span>
       <span style="color:#888; font-size:12px; flex:1 1 100px;">${escapeHtml(u.phone||'no phone')}</span>
-      <span class="mono" style="font-size:12.5px;">PIN ${escapeHtml(String(u.pin))}</span>
+      <span class="mono" style="font-size:12.5px;" title="PINs are stored one-way and can't be shown. Use Edit to set a new one.">PIN ••••</span>
       <button class="btn btn-outline btn-small" onclick="editSiteUser('${u.id}')">Edit</button>
       <button class="btn btn-outline btn-small" onclick="removeSiteUser('${u.id}')">Delete</button>
     </div>`;
@@ -4900,7 +4897,7 @@ async function saveSiteUserEdit(id){
   const list = siteUsersCache[currentSite] || [];
   const u = list.find(x=>x.id===id); if(!u) return;
   const newPin = document.getElementById(`edit_su_pin_${id}`).value.trim();
-  if(isPinTakenAnywhere(newPin, id)){ toast('That PIN is already in use by someone else.'); return; }
+  if(newPin && !/^\d{4,6}$/.test(newPin)){ toast('PIN must be 4-6 digits, or leave it blank to keep the current one.'); return; }
   u.role = document.getElementById(`edit_su_role_${id}`).value;
   const amEl = document.getElementById(`edit_su_alsomaint_${id}`);
   u.alsoMaintenance = !!(amEl && amEl.checked);
@@ -4908,9 +4905,9 @@ async function saveSiteUserEdit(id){
   u.lastName = document.getElementById(`edit_su_last_${id}`).value.trim();
   u.email = document.getElementById(`edit_su_email_${id}`).value.trim() || null;
   u.phone = document.getElementById(`edit_su_phone_${id}`).value.trim() || null;
-  u.pin = newPin;
   editingSiteUserId = null;
-  await persistSiteUsers(); renderAccessList(); toast('Saved.');
+  await persistSiteUsers(); renderAccessList();
+  await savedWithOptionalPin('site', currentSite, u, newPin);
 }
 document.getElementById('addPersonBtn')?.addEventListener('click', async ()=>{
   const firstName = document.getElementById('newPersonFirst').value.trim();
@@ -4921,15 +4918,13 @@ document.getElementById('addPersonBtn')?.addEventListener('click', async ()=>{
   const role = document.getElementById('newPersonRole').value;
   if(!firstName){ toast('Enter at least a first name.'); return; }
   if(typedPin && !/^\d{4,6}$/.test(typedPin)){ toast('PIN must be 4-6 digits, or leave it blank to auto-generate one.'); return; }
-  if(typedPin && isPinTakenAnywhere(typedPin)){ toast('That PIN is already in use by someone else in the system.'); return; }
-  const pin = typedPin || generateUniquePin();
+  const rec = { id:uid(), firstName, lastName, email:email||null, phone:phone||null, role };
   const list = siteUsersCache[currentSite] || [];
-  list.push({ id:uid(), firstName, lastName, email:email||null, phone:phone||null, pin, role });
+  list.push(rec);
   siteUsersCache[currentSite] = list;
   await persistSiteUsers();
-  if(!typedPin && email && emailReady()) sendEmailTo(email, 'Your Refrigeration Tracker PIN', `Hi ${firstName},\n\nYou've been added to the Refrigeration Tracker. Your PIN is: ${pin}\n\nUse it at the login screen.`);
   document.getElementById('newPersonFirst').value=''; document.getElementById('newPersonLast').value=''; document.getElementById('newPersonEmail').value=''; document.getElementById('newPersonPhone').value=''; document.getElementById('newPersonPin').value=''; document.getElementById('newPersonRole').value='crew';
-  toast(!typedPin ? `Added ${firstName} — PIN ${pin}${email?' (emailed to them)':''}.` : `Added ${firstName}.`);
+  await addPersonWithPin('site', currentSite, rec, typedPin, "You've been added to the Refrigeration Tracker.");
 });
 async function removeSiteUser(id){
   if(!confirm("Delete this person's access?")) return;
@@ -5016,15 +5011,13 @@ renderAppVersion();
 (async function init(){
   renderAppVersion();
   initTempPickers();
+  sessionStorage.removeItem('rt_session_pin'); // older versions kept the raw PIN here
+  // Per-tab login, like the old sessionStorage PIN: closing the tab logs out.
+  try{ await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.SESSION); }catch(e){ console.warn('setPersistence failed:', e); }
   await ensureAnonAuth();
   watchForceRefresh();
   watchAppVersion();
-  await migrateOldDataIfNeeded();
-  await loadSuperadmins();
-  await loadStaffNotes();
-  await loadLancelotMgmt();
-  await loadAllSiteUsersForLogin();
-  await loadAllSiteUnitsForSummary();
+  // Nothing else is readable until login; restoreSession loads what this person may see.
   const restored = await restoreSession();
   if(restored){
     showApp(true); renderRoleControls();
@@ -5034,6 +5027,8 @@ renderAppVersion();
     }
   } else {
     showApp(false); openLoginModal();
+    const bye = sessionStorage.getItem('rt_logout_message');
+    if(bye){ document.getElementById('loginError').textContent = bye; sessionStorage.removeItem('rt_logout_message'); }
   }
 })();
 </script>

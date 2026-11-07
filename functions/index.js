@@ -277,3 +277,10 @@ exports.sendQueuedAlertSms = onScheduleAlerts(
     }
   }
 );
+
+// ---------- Server-side PIN login (see pin-login.js) ----------
+const pinLogin = require("./pin-login");
+exports.rtLogin = pinLogin.rtLogin;
+exports.rtLogout = pinLogin.rtLogout;
+exports.rtSetPin = pinLogin.rtSetPin;
+exports.rtForgotPin = pinLogin.rtForgotPin;
