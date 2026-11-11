@@ -1239,6 +1239,10 @@ async function loadSiteData(siteKey){
   const unitsSnap = await siteRef('units', siteKey).once('value');
   units = objToArray(unitsSnap.val());
   let unitsNeedPersist = false;
+  // Roster for this site, used to purge assignments left behind by deleted people
+  const siteRoster = siteUsersCache[siteKey] || [];
+  const knownUserIds = new Set(siteRoster.map(p=>p.id));
+  const rosterLoaded = siteRoster.length > 0;   // guard: never purge before the roster has loaded
   units.forEach(u=>{
     if(!u.history) u.history=[];
     if(!u.assignedUserIds && u.assignedUserId){ u.assignedUserIds=[u.assignedUserId]; u.assignedUserNames=u.assignedUserName?[u.assignedUserName]:[]; unitsNeedPersist=true; }
@@ -1249,6 +1253,23 @@ async function loadSiteData(siteKey){
     if(u.maintenanceTicket){
       if(!u.maintenanceTicket.entries){ u.maintenanceTicket.entries=[]; unitsNeedPersist=true; }
       if(!u.maintenanceTicket.outsideServiceCalls){ u.maintenanceTicket.outsideServiceCalls=[]; unitsNeedPersist=true; }
+    }
+    if(rosterLoaded){
+      // Deleted people: drop their unit assignments, tickets and PM tasks
+      for(let i=(u.assignedUserIds||[]).length-1; i>=0; i--){
+        if(!knownUserIds.has(u.assignedUserIds[i])){
+          u.assignedUserIds.splice(i,1);
+          if(Array.isArray(u.assignedUserNames)) u.assignedUserNames.splice(i,1);
+          unitsNeedPersist = true;
+        }
+      }
+      if(u.assignedUserId && !knownUserIds.has(u.assignedUserId)){ u.assignedUserId=null; u.assignedUserName=null; unitsNeedPersist=true; }
+      if(u.maintenanceTicket && u.maintenanceTicket.assignedToId && !knownUserIds.has(u.maintenanceTicket.assignedToId)){
+        u.maintenanceTicket.assignedToId=null; u.maintenanceTicket.assignedToName=null; unitsNeedPersist=true;
+      }
+      (u.pmTasks||[]).forEach(t=>{
+        if(t.assignedToId && !knownUserIds.has(t.assignedToId)){ t.assignedToId=null; t.assignedToName=null; unitsNeedPersist=true; }
+      });
     }
   });
   if(unitsNeedPersist) await siteRef('units', siteKey).set(arrayToObj(units));
@@ -2520,7 +2541,7 @@ function downloadActivityPdf(){
 // ---- App version ----
 // Shown in the footer so anyone can say which build they're on — the usual
 // "did you get the update?" question is otherwise unanswerable from a screenshot.
-const APP_VERSION = "1.42";
+const APP_VERSION = "1.43";
 const APP_BUILD_DATE = "2026-11-07";
 
 
@@ -4927,9 +4948,59 @@ document.getElementById('addPersonBtn')?.addEventListener('click', async ()=>{
   await addPersonWithPin('site', currentSite, rec, typedPin, "You've been added to the Refrigeration Tracker.");
 });
 async function removeSiteUser(id){
-  if(!confirm("Delete this person's access?")) return;
+  const person = (siteUsersCache[currentSite]||[]).find(u=>u.id===id);
+  const who = person ? fullName(person) : 'this person';
+
+  // What is this person still attached to?
+  const assignedUnits = units.filter(u=>(u.assignedUserIds||[]).includes(id));
+  const theirTickets  = units.filter(u=>u.maintenanceTicket && u.maintenanceTicket.assignedToId===id);
+  const theirPmTasks  = [];
+  units.forEach(u=>{ (u.pmTasks||[]).forEach(t=>{ if(t.assignedToId===id) theirPmTasks.push({u,t}); }); });
+
+  let msg = `Delete ${who}'s access?`;
+  const bits = [];
+  if(assignedUnits.length) bits.push(`${assignedUnits.length} unit assignment${assignedUnits.length===1?'':'s'}`);
+  if(theirTickets.length)  bits.push(`${theirTickets.length} open maintenance ticket${theirTickets.length===1?'':'s'}`);
+  if(theirPmTasks.length)  bits.push(`${theirPmTasks.length} PM task${theirPmTasks.length===1?'':'s'}`);
+  if(bits.length){
+    msg += `\n\nThis will also clear:\n• ${bits.join('\n• ')}`;
+    if(theirTickets.length || theirPmTasks.length) msg += `\n\nThose tickets/tasks will need a new assignee.`;
+  }
+  if(!confirm(msg)) return;
+
+  // 1) Strip the person off every unit they were assigned to
+  let unitsTouched = false;
+  units.forEach(u=>{
+    const idx = (u.assignedUserIds||[]).indexOf(id);
+    if(idx!==-1){
+      u.assignedUserIds.splice(idx,1);
+      if(Array.isArray(u.assignedUserNames)) u.assignedUserNames.splice(idx,1);
+      unitsTouched = true;
+    }
+    // legacy single-assignee fields, if any are still around
+    if(u.assignedUserId===id){ u.assignedUserId=null; u.assignedUserName=null; unitsTouched = true; }
+    // 2) Open maintenance tickets assigned to them
+    if(u.maintenanceTicket && u.maintenanceTicket.assignedToId===id){
+      u.maintenanceTicket.assignedToId = null;
+      u.maintenanceTicket.assignedToName = null;
+      u.maintenanceTicket.entries = u.maintenanceTicket.entries || [];
+      u.maintenanceTicket.entries.push({ at:new Date().toISOString(), by:'System',
+        note:`Assignee ${who} was removed from the Tracker — ticket needs a new assignee.` });
+      unitsTouched = true;
+    }
+    // 3) PM tasks assigned to them
+    (u.pmTasks||[]).forEach(t=>{
+      if(t.assignedToId===id){ t.assignedToId=null; t.assignedToName=null; unitsTouched = true; }
+    });
+  });
+  if(unitsTouched) await persistUnits();
+
+  // 4) Now remove the person
   siteUsersCache[currentSite] = (siteUsersCache[currentSite]||[]).filter(u=>u.id!==id);
-  await persistSiteUsers(); toast('Deleted.');
+  await persistSiteUsers();
+
+  try{ render(); renderUnitAssignments(); renderUserWorkerList(); renderIncidents(); }catch(e){ console.error(e); }
+  toast(bits.length ? `${who} deleted — ${bits.join(', ')} cleared.` : `${who} deleted.`);
 }
 
 // ---- Manage Access: Notify List ----
